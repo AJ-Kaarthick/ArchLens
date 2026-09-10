@@ -1,0 +1,10 @@
+{
+  "name": "@archlens/eslint-config",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "type": "commonjs",
+  "dependencies": {
+    "eslint-config-prettier": "^9.0.0"
+  }
+}
