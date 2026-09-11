@@ -8,9 +8,9 @@ ArchLens is an open-source platform that enables developers, contributors, and t
 
 ## Project Status
 
-**Current Status:** Phase 3 Complete (Deterministic Ingestion, Architecture Analysis & Grounded AI Explanations).
+**Current Status:** Phase 4 Complete (Deterministic Ingestion, Architecture Analysis, Grounded AI Explanations & Semantic Repository Retrieval).
 
-ArchLens features a fully functional, deterministic repository analysis engine, paired with a grounded AI reasoning layer and an interactive React explorer. Vector databases, code embeddings, and semantic search are planned for Phase 4+.
+ArchLens features a fully functional, deterministic repository analysis engine, paired with a grounded AI reasoning layer, intelligent code chunking with dual-mode vector search (PostgreSQL `pgvector` with relational cosine fallback), and an interactive React explorer.
 
 ---
 
@@ -22,27 +22,28 @@ Gaining a quick, accurate mental model of a new or unfamiliar repository is trad
 - **Environment friction:** Requiring specific language toolchains, SDK versions, or container daemons just to evaluate a project.
 - **AI hallucination risks:** Off-the-shelf LLMs routinely guess project dependencies, hallucinate outdated patterns, and misstate repository structures when ungrounded.
 
-ArchLens solves this by establishing a **factual, deterministic baseline** first. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any AI reasoning occurs. AI reasoning is strictly constrained to explaining verified facts with verifiable evidence citations.
+ArchLens solves this by establishing a **factual, deterministic baseline** first. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any AI reasoning occurs. AI reasoning is strictly constrained to explaining verified facts with verifiable evidence citations. Semantic retrieval augments reasoning by locating relevant code slices without altering structural facts.
 
 ---
 
-## What Works Today (Phase 1, Phase 2 & Phase 3)
+## What Works Today (Phase 1, Phase 2, Phase 3 & Phase 4)
 
 - **Bounded GitHub Ingestion:** Fetches repository metadata and recursive file trees via the GitHub REST API v3 without git cloning.
-- **Safety Bounds:** Enforces a strict 10,000-item tree bound and a 256 KB landmark file preview bound to prevent denial-of-service and memory exhaustion.
+- **Safety Bounds:** Enforces a strict 10,000-item tree bound, 256 KB landmark file preview bound, max 100 files, and max 500 code chunks per repository.
 - **Rate-Limit Resilience:** Transparently detects GitHub API 403/429 limits, calculates exact reset timestamps from response headers, and returns structured recovery instructions.
 - **Deterministic Tech Stack Detection:** Accurately extracts dependencies, build systems, styling engines, test runners, and database libraries from manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, etc.) with confidence levels and source evidence.
 - **Architecture Pattern Detection:** Automatically identifies monorepo tools (`pnpm`, `Turborepo`, `Nx`, `Lerna`), workspace packages, client-server separation, layered service directories, and primary entrypoints.
 - **Structural Metrics:** Computes language breakdowns, file category distributions, total bytes, and identifies top 10 largest files.
-- **Grounded AI Explanation Layer:** Generates fact-backed architectural explanations across four distinct topics: Repository Overview, Architecture & Patterns, Tech Stack Synergy, and Runtime Entrypoints.
+- **Semantic Code Retrieval & Search:** Line-aware chunking engine (50 lines per chunk, 10-line overlap) for source, doc, and config files with metadata filtering (category and limit in the UI; pathPrefix at the API level), similarity score ranking, and execution timing—operating purely on indexed text slices without executing repository code.
+- **Dual-Mode Vector Persistence:** PostgreSQL `code_chunks` table supporting native `pgvector` (HNSW cosine distance) when the extension is available, with an automatic, zero-crash relational and in-memory cosine similarity fallback.
+- **Embedding Provider Abstraction:** Flexible backend interface (`IEmbeddingProvider`) supporting Google Gemini (`text-embedding-004` via `@google/genai`) and a deterministic `MockEmbeddingProvider` for 100% offline development and testing without API keys.
+- **Grounded AI Explanation Layer:** Generates fact-backed architectural explanations across four distinct topics: Repository Overview, Architecture & Patterns, Tech Stack Synergy, and Runtime Entrypoints, augmented by relevant semantic code slices. `EvidenceValidator` remains strictly authoritative over all retrieved context and generated claims.
 - **Evidence Citations:** Every AI explanation includes verifiable citations pointing directly to real manifests, landmark files, dependencies, entrypoints, and structural metrics.
-- **Prompt-Injection Defense:** Untrusted repository content (README and description) is bounded to 2,000 characters and isolated in `<untrusted_content>` tags, preventing malicious repository instructions from subverting AI reasoning.
-- **AI Provider Abstraction:** Flexible backend interface (`IAIProvider`) supporting Google Gemini (`gemini-2.0-flash` via `@google/genai`) and a deterministic `MockAIProvider` for 100% offline development and testing without API keys.
-
-- **PostgreSQL Explanation Caching:** Explanations are cached in the `ai_explanations` table keyed on `(analysis_id, topic, target)`. Re-requesting an explanation for a previously analyzed snapshot costs zero AI tokens and returns with sub-millisecond database latency.
-- **PostgreSQL + Drizzle Persistence:** Stores repositories, historical analysis runs, and explanations with an idempotent schema and conflict-safe upserts on `(owner, name)`.
-- **Fastify REST API:** Synchronous endpoints for on-demand analysis, cached analysis retrieval, bounded landmark file fetching, and AI explanations (`POST /api/repositories/:owner/:repo/explain`).
-- **React Web Explorer:** Modern UI built with Tailwind CSS, Lucide icons, interactive collapsible file tree with real-time filtering, metric progress bars, safe `react-markdown` document previewing, and an interactive **AI Insights** tab.
+- **Prompt-Injection Defense:** Untrusted repository content (README, description, and retrieved code chunks) is bounded, sanitized, and isolated inside `<untrusted_content>` tags, preventing malicious repository instructions from subverting AI reasoning.
+- **AI Provider Abstraction:** Backend interface (`IAIProvider`) supporting Google Gemini (`gemini-2.0-flash`) and a deterministic `MockAIProvider`.
+- **PostgreSQL Explanation Caching:** Explanations are cached in `ai_explanations` keyed on `(analysis_id, topic, target)` for instant, zero-token replay.
+- **Fastify REST API:** Synchronous endpoints for analysis (`POST /api/analyze`), latest snapshot (`GET /api/repositories/:owner/:repo/latest`), landmark previews (`GET /api/repositories/:owner/:repo/landmark-content`), AI explanations (`POST /api/repositories/:owner/:repo/explain`), and semantic search (`POST /api/repositories/:owner/:repo/search`).
+- **React Web Explorer:** Modern UI built with Tailwind CSS, Lucide icons, interactive collapsible file tree, metric progress bars, safe markdown previewing, interactive **AI Insights** tab, and dedicated **Semantic Search** view with natural language query input, quick example suggestions, category dropdown, limit selector, similarity score badges, line ranges, and direct file navigation. (Category filtering and result-limit controls are present in the current UI; `pathPrefix` filtering is supported at the API level).
 
 ---
 
@@ -89,13 +90,14 @@ Categorization & Landmarks                         Tech Stack Detection         
 
 ## Tech Stack
 
-| Layer                      | Technologies                                                   |
-| -------------------------- | -------------------------------------------------------------- |
-| **Frontend**               | React 18, Vite 4, Tailwind CSS, Lucide React, `react-markdown` |
-| **Backend**                | Node.js 20+, Fastify 4, `@fastify/cors`, `postgres.js`         |
-| **Database & ORM**         | PostgreSQL 16, Drizzle ORM, Drizzle Kit                        |
-| **Contracts & Validation** | Zod 3, TypeScript 5 (Strict Mode, ESM)                         |
-| **Workspace & Tooling**    | `pnpm` workspaces, Vitest, ESLint, Prettier                    |
+| Layer                      | Technologies                                                                      |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| **Frontend**               | React 18, Vite 4, Tailwind CSS, Lucide React, `react-markdown`                    |
+| **Backend**                | Node.js 20+, Fastify 4, `@fastify/cors`, `postgres.js`                            |
+| **Database & Vector**      | PostgreSQL 16 (`pgvector` + relational cosine fallback), Drizzle ORM, Drizzle Kit |
+| **Embeddings & AI**        | `@google/genai` (`text-embedding-004`, `gemini-2.0-flash`), Mock Providers        |
+| **Contracts & Validation** | Zod 3, TypeScript 5 (Strict Mode, ESM)                                            |
+| **Workspace & Tooling**    | `pnpm` workspaces, Vitest, ESLint, Prettier                                       |
 
 ---
 
@@ -109,6 +111,7 @@ Categorization & Landmarks                         Tech Stack Detection         
 - **File Categorization:** Automated classification into `source`, `test`, `config`, `doc`, `asset`, `ci`, and `other`.
 - **Landmark Recognition:** Identifies project documentation (`README.md`, `LICENSE`), configuration manifests, and primary entrypoints (`src/index.ts`, `main.go`, `server.ts`, `App.tsx`, etc.).
 - **Monorepo Detection:** `pnpm-workspace.yaml`, `turbo.json`, `nx.json`, `lerna.json`, and npm/yarn workspaces.
+- **Semantic Code Search:** Line-aware chunk indexing with cosine similarity ranking, pathPrefix, and category filtering.
 
 ---
 
@@ -118,7 +121,7 @@ Categorization & Landmarks                         Tech Stack Detection         
 
 - **Node.js**: `>= 20.0.0`
 - **pnpm**: `>= 9.0.0` (`corepack enable` recommended)
-- **PostgreSQL**: `>= 15` (Docker recommended)
+- **PostgreSQL**: `>= 15` (Docker recommended; `pgvector/pgvector:pg16` for native vector search)
 
 ### 1. Clone & Install Dependencies
 
@@ -130,7 +133,7 @@ pnpm install
 
 ### 2. Start PostgreSQL
 
-Using Docker:
+Using Docker (Standard PostgreSQL with relational fallback):
 
 ```bash
 docker run -d \
@@ -142,23 +145,44 @@ docker run -d \
   postgres:16-alpine
 ```
 
+_Or with native `pgvector` support:_
+
+```bash
+docker run -d \
+  --name archlens-postgres \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=archlens \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
+```
+
 ### 3. Configure Environment Variables
+
+For local development, create your local environment file:
+
+```bash
+cp apps/api/.env.example apps/api/.env
+```
+
+ArchLens automatically loads `apps/api/.env` at backend startup. In production or containerized environments, system environment variables take precedence.
 
 The backend accepts the following optional environment variables:
 
-| Variable         | Description                                                                                                   | Default                                                |
-| ---------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `DATABASE_URL`   | PostgreSQL connection string                                                                                  | `postgres://postgres:postgres@localhost:5432/archlens` |
-| `GITHUB_TOKEN`   | Optional GitHub Personal Access Token (server-side only) to increase REST rate limits from 60 to 5,000 req/hr | _None_                                                 |
-| `GEMINI_API_KEY` | Optional Google Gemini API key (server-side only). When omitted, ArchLens uses `MockAIProvider` gracefully    | _None_                                                 |
-| `AI_PROVIDER`    | AI provider override (`gemini` or `mock`). Defaults to `gemini` if API key present, otherwise `mock`          | `gemini` (if key set) / `mock`                         |
-| `GEMINI_MODEL`   | Gemini model name                                                                                             | `gemini-2.0-flash`                                     |
-
-| `PORT`           | API server port                                                                                               | `3000`                                                 |
-| `HOST`           | API server host interface                                                                                     | `0.0.0.0`                                              |
+| Variable                 | Description                                                                                                   | Default                                                |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `DATABASE_URL`           | PostgreSQL connection string                                                                                  | `postgres://postgres:postgres@localhost:5432/archlens` |
+| `GITHUB_TOKEN`           | Optional GitHub Personal Access Token (server-side only) to increase REST rate limits from 60 to 5,000 req/hr | _None_                                                 |
+| `GEMINI_API_KEY`         | Optional Google Gemini API key (server-side only). When omitted, ArchLens uses Mock providers gracefully      | _None_                                                 |
+| `AI_PROVIDER`            | AI explanation provider override (`gemini` or `mock`). Defaults to `gemini` if API key set, else `mock`       | `gemini` (if key set) / `mock`                         |
+| `GEMINI_MODEL`           | Gemini generation model name                                                                                  | `gemini-2.0-flash`                                     |
+| `EMBEDDING_PROVIDER`     | Embedding provider override (`gemini` or `mock`). Defaults to `gemini` if API key set, else `mock`            | `gemini` (if key set) / `mock`                         |
+| `GEMINI_EMBEDDING_MODEL` | Gemini text embedding model name                                                                              | `text-embedding-004`                                   |
+| `PORT`                   | API server port                                                                                               | `3000`                                                 |
+| `HOST`                   | API server host interface                                                                                     | `0.0.0.0`                                              |
 
 > [!NOTE]
-> `GITHUB_TOKEN` and `GEMINI_API_KEY` are strictly consumed server-side inside `apps/api`. They are never bundled, passed, or exposed to `apps/web` or `packages/shared`.
+> `GITHUB_TOKEN` and `GEMINI_API_KEY` are strictly consumed server-side inside `apps/api`. They are never bundled, passed, or exposed to `apps/web` or `packages/shared`. When `GEMINI_API_KEY` is omitted, ArchLens runs 100% offline with `MockAIProvider` and `MockEmbeddingProvider`.
 
 ### 4. Build Workspace Packages
 
@@ -250,6 +274,43 @@ Generates or retrieves a cached grounded AI explanation for an analyzed reposito
 - **Response (200):** `ExplainResponse` (summary, markdown explanation, key takeaways, grounded evidence citations, cache status)
 - **Caching:** Automatically cached in PostgreSQL; repeated requests return immediately at zero token cost.
 
+### `POST /api/repositories/:owner/:repo/search`
+
+Executes semantic search over repository code chunks with vector or cosine similarity ranking.
+
+- **Payload:**
+  ```json
+  {
+    "query": "postgres connection pool drizzle",
+    "limit": 5,
+    "pathPrefix": "apps/api",
+    "category": "source"
+  }
+  ```
+- **Response (200):** `SearchResponse`
+  ```json
+  {
+    "query": "postgres connection pool drizzle",
+    "results": [
+      {
+        "filePath": "apps/api/src/db/index.ts",
+        "chunkIndex": 0,
+        "startLine": 1,
+        "endLine": 15,
+        "content": "...",
+        "score": 0.8421,
+        "language": "ts",
+        "category": "source"
+      }
+    ],
+    "totalMatches": 1,
+    "durationMs": 18,
+    "fallback": false
+  }
+  ```
+- **Dual-Mode:** Returns native `pgvector` HNSW distance when available, or relational in-memory cosine ranking fallback transparently.
+- **UI vs. API Capabilities:** The REST API supports `pathPrefix` filtering (e.g. `apps/api`), whereas the current web UI provides query input, category filtering (`source`, `doc`, `config`), and result limit controls (`3`, `5`, `10`, `20`).
+
 ### `GET /health`
 
 Liveness check returning service status and shared contract version.
@@ -260,7 +321,20 @@ Liveness check returning service status and shared contract version.
 
 - **Tree Size Bound:** Max 10,000 items. Repositories exceeding this bound or returning a truncated tree are rejected to prevent memory pressure.
 - **Landmark File Size Bound:** Max 256 KB. Files larger than 256 KB have their content truncated in previews.
+- **Chunking Bounds:** Max 100 candidate files and max 500 chunks per repository snapshot. Chunks are 50 lines with 10-line overlap.
 - **Execution Model:** Synchronous REST execution. Asynchronous queue workers (BullMQ/Redis) are planned for Phase 6.
+
+### Semantic Retrieval & Operational Limitations
+
+1. **Local Development Environment (`Relational Cosine Fallback`):** The default local Docker development environment (`postgres:16-alpine`) does not have the `pgvector` extension compiled or enabled. As designed, ArchLens automatically activates the relational in-memory cosine fallback, and the web UI displays the status badge **"Relational Cosine Fallback"**.
+2. **Intentional Graceful Degradation:** The relational fallback is an intentional development and graceful-degradation mechanism. It must **not** be characterized as computationally or architecturally equivalent to production `pgvector` retrieval with HNSW indexing.
+3. **Deterministic Mock Embeddings:** In offline development, automated CI suites, or when `GEMINI_API_KEY` is omitted, ArchLens uses `MockEmbeddingProvider`. This provider produces deterministic 768-dimensional normalized vectors via token and n-gram hashing. Its retrieval quality is **not** representative of production semantic-search quality.
+4. **Known Retrieval-Quality Limitation:** Under the mock embedding provider and relational cosine fallback, low-confidence, broad, or unrelated search queries may still return results from the indexed chunk set. We make no claim of high semantic accuracy or deep language comprehension under the mock/fallback configuration.
+5. **Production Evaluation Requirement:** Rigorous semantic retrieval quality evaluation requires running a PostgreSQL instance with native `pgvector` (e.g., `pgvector/pgvector:pg16`) and configuring a real embedding model (`GEMINI_API_KEY` with `text-embedding-004`).
+6. **Deterministic Baseline Remains Source of Truth:** Phase 2 deterministic analysis (package manifests, verified git trees, entrypoints, and metrics) remains the sole authoritative source of repository facts. Semantic retrieval serves strictly as a relevance and context-augmentation mechanism—never as a source of truth.
+7. **Evidence Grounding Authority:** `EvidenceValidator` remains strictly authoritative over retrieved context; citations must pass Phase 2 grounding checks before persistence or client presentation.
+8. **UI Filtering Controls:** The web UI currently exposes category filtering and result-limit controls. It does **not** expose a dedicated Path Prefix input, even though `pathPrefix` is supported by the backend API.
+9. **Zero Code Execution:** Repository code is never executed during semantic indexing or retrieval; chunking and vector indexing operate purely on static text slices.
 
 ---
 
@@ -269,7 +343,7 @@ Liveness check returning service status and shared contract version.
 - **[x] Phase 1:** Monorepo Foundation, shared Zod contracts, strict tooling.
 - **[x] Phase 2:** Bounded GitHub REST ingestion, deterministic analysis, PostgreSQL persistence, React web explorer.
 - **[x] Phase 3:** Grounded AI repository understanding, provider abstraction (Gemini & Mock), deterministic evidence validation, PostgreSQL caching, and interactive AI Insights UI.
-- **[ ] Phase 4:** _Planned_ — Advanced semantic retrieval and structured code intelligence.
+- **[x] Phase 4:** Semantic Repository Retrieval (intelligent line-aware chunking, dual-mode pgvector + relational fallback, embeddings, search API & UI).
 - **[ ] Phase 5:** _Planned_ — Product refinement, UX polish, and deep visualization.
 - **[ ] Phase 6:** _Planned_ — Production hardening, caching, queue workers, and public deployment.
 - **[ ] Phase 7+:** _Planned_ — Browser extensions and companion desktop applications.

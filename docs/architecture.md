@@ -36,8 +36,8 @@ The backend is structured into decoupled, single-responsibility modules:
 ```
 apps/api/src/
 ├── db/
-│   ├── schema.ts          # Drizzle tables (repositories, analyses, ai_explanations)
-│   └── index.ts           # Postgres connection & idempotent initDb()
+│   ├── schema.ts          # Drizzle tables (repositories, analyses, ai_explanations, code_chunks)
+│   └── index.ts           # Postgres connection, pgvector detection & idempotent initDb()
 ├── services/
 │   ├── github.service.ts  # Bounded GitHub REST client & rate limit handling
 │   ├── repository.service.ts # Ingestion orchestration & Postgres upserts
@@ -47,18 +47,27 @@ apps/api/src/
 │   │   ├── architecture.ts# Monorepo & pattern detection
 │   │   ├── metrics.ts     # Structural and language metrics
 │   │   └── index.ts       # Orchestrator producing AnalysisResult
-│   └── ai/
-│       ├── provider.interface.ts # IAIProvider & AIRateLimitError contracts
-│       ├── provider.factory.ts   # Provider instantiation & fallback
-│       ├── context-builder.ts    # Prompt construction & injection defense
-│       ├── evidence-validator.ts # Deterministic citation validation
-│       ├── ai.service.ts         # Orchestration & PostgreSQL caching
-│       └── providers/
-│           ├── gemini.provider.ts# Google Gemini (@google/genai)
-│           └── mock.provider.ts  # Deterministic offline heuristic
+│   ├── ai/
+│   │   ├── provider.interface.ts # IAIProvider & AIRateLimitError contracts
+│   │   ├── provider.factory.ts   # Provider instantiation & fallback
+│   │   ├── context-builder.ts    # Prompt construction & injection defense
+│   │   ├── evidence-validator.ts # Deterministic citation validation
+│   │   ├── ai.service.ts         # Orchestration & PostgreSQL caching
+│   │   ├── embeddings/
+│   │   │   ├── embedding.interface.ts # IEmbeddingProvider contract
+│   │   │   ├── embedding-provider.factory.ts # Factory dispatch & fallback
+│   │   │   ├── gemini-embedding.provider.ts # text-embedding-004
+│   │   │   └── mock-embedding.provider.ts # Deterministic 768-dim L2 vector generator
+│   │   └── providers/
+│   │       ├── gemini.provider.ts# Google Gemini (@google/genai)
+│   │       └── mock.provider.ts  # Deterministic offline heuristic
+│   └── retrieval/
+│       ├── chunker.ts            # Line-aware code & doc chunking engine
+│       └── retrieval.service.ts  # Dual-mode vector & relational search
 ├── routes/
 │   ├── repository.routes.ts # Analysis & landmark REST endpoints
-│   └── ai.routes.ts         # Grounded explanation endpoint (/explain)
+│   ├── ai.routes.ts         # Grounded explanation endpoint (/explain)
+│   └── search.routes.ts     # Semantic repository search endpoint (/search)
 └── server.ts              # App factory, CORS, and startup bootstrap
 ```
 
@@ -70,4 +79,5 @@ apps/api/src/
 2. **Deterministic Baseline:** All tech stack detections and metrics are calculated deterministically from verified source manifests and tree patterns.
 3. **Idempotent Storage:** Repositories are keyed on `(owner, name)` with conflict-safe upserts, ensuring duplicate ingestion runs remain consistent.
 4. **Isolated AI Layer (Phase 3 Complete):** The AI reasoning layer is strictly confined to `apps/api` behind the `IAIProvider` interface. AI consumes already-verified Phase 2 facts, validates every citation via `EvidenceValidator`, and caches results in PostgreSQL.
-5. **Deferred Clients (Phase 7+):** Browser extensions and desktop clients will act as consumers of the existing `apps/api` and `@archlens/shared` layers without backend architectural modifications.
+5. **Semantic Retrieval Augmentation (Phase 4 Complete):** Deterministic Phase 2 facts remain the sole authoritative source of truth. Vector similarity is used strictly for relevance ranking and localized context retrieval—never to invent or alter structural facts. `EvidenceValidator` remains authoritative over all retrieved context and AI claims. Ingested repository code is never executed. Search supports dual-mode persistence (`pgvector` HNSW with an automatic relational in-memory cosine fallback for local development).
+6. **Deferred Clients (Phase 7+):** Browser extensions and desktop clients will act as consumers of the existing `apps/api` and `@archlens/shared` layers without backend architectural modifications.

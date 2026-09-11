@@ -307,4 +307,3 @@ describe('AIService', () => {
     await db.delete(repositories).where(eq(repositories.id, repoRow.id));
   });
 });
-

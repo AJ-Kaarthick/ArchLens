@@ -1,3 +1,4 @@
+import './config/env.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { ARCHLENS_VERSION } from '@archlens/shared';
@@ -6,12 +7,15 @@ import { createRepositoryRoutes } from './routes/repository.routes.js';
 import { RepositoryService } from './services/repository.service.js';
 import { createAiRoutes } from './routes/ai.routes.js';
 import { AIService } from './services/ai/ai.service.js';
+import { createSearchRoutes } from './routes/search.routes.js';
+import { RetrievalService } from './services/retrieval/retrieval.service.js';
 
 export function buildApp(
   options: {
     logger?: boolean;
     repositoryService?: RepositoryService;
     aiService?: AIService;
+    retrievalService?: RetrievalService;
   } = {}
 ): FastifyInstance {
   const app = Fastify({
@@ -29,6 +33,7 @@ export function buildApp(
 
   app.register(createRepositoryRoutes(options.repositoryService));
   app.register(createAiRoutes(options.aiService));
+  app.register(createSearchRoutes(options.retrievalService));
 
   return app;
 }

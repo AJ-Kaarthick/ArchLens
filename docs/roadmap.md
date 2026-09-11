@@ -36,11 +36,21 @@ ArchLens follows a staged, milestone-driven development roadmap. Each phase deli
 - Fastify route: `POST /api/repositories/:owner/:repo/explain` with structured error handling and rate-limit recovery
 - Interactive React UI: `AIInsightsView` tab with topic controls, executive summary, takeaways, and evidence badges
 
-## Phase 4: Advanced Semantic Retrieval — Planned
+## Phase 4: Semantic Repository Retrieval — Completed
 
-- Intelligent chunking for code and documentation
-- Structured semantic retrieval and code search
-- Evaluation of vector persistence (`pgvector`)
+- Line-aware chunking engine (`CodeChunker`): 50-line chunks, 10-line overlap, skips binary/vendor/lockfiles/minified files, strict caps (max 100 files, max 500 chunks, 256 KB file cap)
+- Dual-mode vector persistence: PostgreSQL `code_chunks` table supporting native `pgvector` HNSW vector distance search with an automatic in-memory cosine fallback when the extension is unavailable
+- Embedding provider abstraction (`IEmbeddingProvider`) in `apps/api`
+- Google Gemini embedding provider (`GeminiEmbeddingProvider`) using `text-embedding-004` via `@google/genai` (15s timeout, rate limit mapping)
+- Deterministic mock embedding provider (`MockEmbeddingProvider`) generating 768-dimensional normalized L2 vectors for 100% offline development and testing
+- Embedding provider factory (`EmbeddingProviderFactory`) with automatic fallback when API keys are absent
+- Retrieval Service (`RetrievalService`): Repository-scoped and analysis-scoped semantic indexing and search with metadata filtering (`pathPrefix`, `category`), score ranking, and execution timing
+- AI Explanation enhancement: Semantic retrieval feeds relevant code slices into AI explanation prompts (`ContextBuilder`) inside delimiter-sanitized `<untrusted_content>` tags while preserving deterministic fact supremacy
+- Evidence grounding: `EvidenceValidator` remains strictly authoritative over all retrieved context and AI claims
+- Zero code execution: Repository code is never executed during semantic indexing or retrieval
+- Fastify search route: `POST /api/repositories/:owner/:repo/search` with structured error handling and validation
+- Interactive React UI: `SemanticSearchView` tab with query bar, example suggestions, category dropdown, limit selector, score badges, line ranges, and direct navigation to file contents (API supports `pathPrefix`; UI path prefix input planned for Phase 5)
+- Operational fallback path: Default local dev environment uses standard PostgreSQL with relational in-memory cosine fallback; production evaluation requires `pgvector`-enabled PostgreSQL and real Gemini embeddings
 
 ## Phase 5: Product Refinement & UI/UX Quality — Planned
 

@@ -38,7 +38,8 @@ export class MockAIProvider implements IAIProvider {
     const metrics = analysis.metrics;
 
     const topTechNames = techStack.slice(0, 4).map((t) => t.name);
-    const techSummaryStr = topTechNames.length > 0 ? topTechNames.join(', ') : 'standard platform libraries';
+    const techSummaryStr =
+      topTechNames.length > 0 ? topTechNames.join(', ') : 'standard platform libraries';
     const patternStr = patterns.length > 0 ? patterns.join(', ') : 'Modular organization';
 
     const baseEvidence = EvidenceValidator.synthesizeGroundedCitations(analysis);
@@ -74,7 +75,9 @@ export class MockAIProvider implements IAIProvider {
             `Boundaries: ${isMonorepo ? `${workspaces.length} workspace modules` : 'Single project layout'}.`,
             `Primary startup: ${entrypoints[0] || 'Standard entrypoint'}.`,
           ],
-          evidence: baseEvidence.filter((e) => e.type === 'pattern' || e.type === 'entrypoint' || e.type === 'manifest'),
+          evidence: baseEvidence.filter(
+            (e) => e.type === 'pattern' || e.type === 'entrypoint' || e.type === 'manifest'
+          ),
           provider: this.name,
           model: this.model,
         };
@@ -89,7 +92,9 @@ export class MockAIProvider implements IAIProvider {
             `Key technologies: ${techSummaryStr}.`,
             `Manifest count: ${analysis.architecture.keyLandmarks.filter((l) => l.type === 'manifest').length} configuration manifests.`,
           ],
-          evidence: baseEvidence.filter((e) => e.type === 'dependency' || e.type === 'manifest' || e.type === 'metric'),
+          evidence: baseEvidence.filter(
+            (e) => e.type === 'dependency' || e.type === 'manifest' || e.type === 'metric'
+          ),
           provider: this.name,
           model: this.model,
         };
@@ -104,7 +109,9 @@ export class MockAIProvider implements IAIProvider {
             `Landmarks: ${analysis.architecture.keyLandmarks.length} landmark navigation points.`,
             `Execution model: Deterministic startup verified from repository structure.`,
           ],
-          evidence: baseEvidence.filter((e) => e.type === 'entrypoint' || e.type === 'manifest' || e.type === 'file'),
+          evidence: baseEvidence.filter(
+            (e) => e.type === 'entrypoint' || e.type === 'manifest' || e.type === 'file'
+          ),
           provider: this.name,
           model: this.model,
         };

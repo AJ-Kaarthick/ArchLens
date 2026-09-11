@@ -7,10 +7,7 @@ export class EvidenceValidator {
    * If the model provided fabricated or empty citations, fallback grounded citations
    * are synthesized directly from verified Phase 2 facts.
    */
-  static validate(
-    citations: EvidenceCitation[],
-    analysis: AnalysisResult
-  ): EvidenceCitation[] {
+  static validate(citations: EvidenceCitation[], analysis: AnalysisResult): EvidenceCitation[] {
     const verified: EvidenceCitation[] = [];
 
     // Pre-calculate lookup sets from Phase 2 facts
@@ -26,21 +23,21 @@ export class EvidenceValidator {
     const languageNames = new Set(
       Object.keys(analysis.metrics.languages).map((l) => l.toLowerCase())
     );
-    const patterns = new Set(
-      analysis.architecture.detectedPatterns.map((p) => p.toLowerCase())
-    );
+    const patterns = new Set(analysis.architecture.detectedPatterns.map((p) => p.toLowerCase()));
 
     for (const citation of citations) {
-      if (EvidenceValidator.isCitationVerified(citation, {
-        treePaths,
-        treeFilenames,
-        landmarkPaths,
-        entrypointPaths,
-        techStackNames,
-        languageNames,
-        patterns,
-        analysis,
-      })) {
+      if (
+        EvidenceValidator.isCitationVerified(citation, {
+          treePaths,
+          treeFilenames,
+          landmarkPaths,
+          entrypointPaths,
+          techStackNames,
+          languageNames,
+          patterns,
+          analysis,
+        })
+      ) {
         verified.push(citation);
       }
     }

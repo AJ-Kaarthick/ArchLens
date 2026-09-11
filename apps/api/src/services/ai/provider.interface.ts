@@ -37,4 +37,3 @@ export interface IAIProvider {
   readonly model: string;
   explain(request: AIExplanationRequest): Promise<AIExplanationResult>;
 }
-

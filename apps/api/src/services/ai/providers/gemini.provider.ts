@@ -33,7 +33,6 @@ export class GeminiAIProvider implements IAIProvider {
     this.client = new GoogleGenAI({ apiKey });
   }
 
-
   async explain(request: AIExplanationRequest): Promise<AIExplanationResult> {
     const abortController = new AbortController();
 

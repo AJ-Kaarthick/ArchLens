@@ -48,7 +48,7 @@ describe('GitHubService (Offline / Mocked)', () => {
       expect(err.isRateLimit).toBe(true);
       expect(err.message).toContain('API rate limit exceeded');
       expect(err.resetAt).toBeInstanceOf(Date);
-      expect(err.suggestedAction).toContain('rate limit');
+      expect(err.suggestedAction.toLowerCase()).toContain('rate limit');
     }
   });
 
@@ -135,5 +135,15 @@ describe('GitHubService (Offline / Mocked)', () => {
     await expect(service.getRepositoryMetadata('nonexistent', 'missing')).rejects.toThrow(
       GitHubNotFoundError
     );
+  });
+
+  it('configures Authorization header when token is present and omits when absent', () => {
+    const serviceWithToken = new GitHubService({ token: 'dummy-test-token' });
+    const headersWithToken = (serviceWithToken as any).getHeaders();
+    expect(headersWithToken.Authorization).toBe('Bearer dummy-test-token');
+
+    const serviceWithoutToken = new GitHubService({ token: '' });
+    const headersWithoutToken = (serviceWithoutToken as any).getHeaders();
+    expect(headersWithoutToken.Authorization).toBeUndefined();
   });
 });

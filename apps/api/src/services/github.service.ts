@@ -1,3 +1,4 @@
+import '../config/env.js';
 import type { RepositoryMetadata, LandmarkContent } from '@archlens/shared';
 
 export class GitHubRateLimitError extends Error {

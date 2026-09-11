@@ -1,4 +1,13 @@
-import { pgTable, serial, text, integer, timestamp, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
+import {
+  pgTable,
+  serial,
+  text,
+  integer,
+  timestamp,
+  jsonb,
+  uniqueIndex,
+  index,
+} from 'drizzle-orm/pg-core';
 import type {
   TechStackDetection,
   ArchitectureOverview,
@@ -56,9 +65,38 @@ export const aiExplanations = pgTable('ai_explanations', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
 });
 
+export const codeChunks = pgTable(
+  'code_chunks',
+  {
+    id: serial('id').primaryKey(),
+    analysisId: integer('analysis_id')
+      .notNull()
+      .references(() => analyses.id, { onDelete: 'cascade' }),
+    filePath: text('file_path').notNull(),
+    chunkIndex: integer('chunk_index').notNull(),
+    startLine: integer('start_line').notNull(),
+    endLine: integer('end_line').notNull(),
+    content: text('content').notNull(),
+    language: text('language'),
+    category: text('category').notNull(),
+    embedding: jsonb('embedding').$type<number[] | null>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    analysisIdx: index('code_chunks_analysis_idx').on(table.analysisId),
+    uniqueChunkIdx: uniqueIndex('code_chunks_analysis_file_chunk_unique').on(
+      table.analysisId,
+      table.filePath,
+      table.chunkIndex
+    ),
+  })
+);
+
 export type RepositoryRecord = typeof repositories.$inferSelect;
 export type InsertRepositoryRecord = typeof repositories.$inferInsert;
 export type AnalysisRecord = typeof analyses.$inferSelect;
 export type InsertAnalysisRecord = typeof analyses.$inferInsert;
 export type AIExplanationRecord = typeof aiExplanations.$inferSelect;
 export type InsertAIExplanationRecord = typeof aiExplanations.$inferInsert;
+export type CodeChunkRecord = typeof codeChunks.$inferSelect;
+export type InsertCodeChunkRecord = typeof codeChunks.$inferInsert;

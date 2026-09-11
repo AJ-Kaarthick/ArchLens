@@ -63,7 +63,13 @@ describe('MockAIProvider', () => {
       },
       commitSha: 'sha1',
       techStack: [
-        { category: 'framework' as const, name: 'Flask', version: '3.0.0', confidence: 'high' as const, evidence: 'pyproject.toml' },
+        {
+          category: 'framework' as const,
+          name: 'Flask',
+          version: '3.0.0',
+          confidence: 'high' as const,
+          evidence: 'pyproject.toml',
+        },
       ],
       architecture: {
         isMonorepo: false,
@@ -71,7 +77,14 @@ describe('MockAIProvider', () => {
         workspaces: [],
         detectedPatterns: ['Microframework'],
         primaryEntrypoints: ['src/flask/app.py'],
-        keyLandmarks: [{ path: 'pyproject.toml', name: 'pyproject.toml', type: 'manifest' as const, description: 'Python config' }],
+        keyLandmarks: [
+          {
+            path: 'pyproject.toml',
+            name: 'pyproject.toml',
+            type: 'manifest' as const,
+            description: 'Python config',
+          },
+        ],
       },
       metrics: {
         totalFiles: 35,
@@ -137,7 +150,13 @@ describe('MockAIProvider', () => {
       },
       commitSha: 'sha2',
       techStack: [
-        { category: 'framework' as const, name: 'Tokio', version: '1.35.0', confidence: 'high' as const, evidence: 'Cargo.toml' },
+        {
+          category: 'framework' as const,
+          name: 'Tokio',
+          version: '1.35.0',
+          confidence: 'high' as const,
+          evidence: 'Cargo.toml',
+        },
       ],
       architecture: {
         isMonorepo: true,
@@ -145,7 +164,14 @@ describe('MockAIProvider', () => {
         workspaces: ['tokio', 'tokio-util', 'tokio-macros'],
         detectedPatterns: ['Async Runtime'],
         primaryEntrypoints: ['tokio/src/lib.rs'],
-        keyLandmarks: [{ path: 'Cargo.toml', name: 'Cargo.toml', type: 'manifest' as const, description: 'Cargo workspace' }],
+        keyLandmarks: [
+          {
+            path: 'Cargo.toml',
+            name: 'Cargo.toml',
+            type: 'manifest' as const,
+            description: 'Cargo workspace',
+          },
+        ],
       },
       metrics: {
         totalFiles: 150,
@@ -180,4 +206,3 @@ describe('MockAIProvider', () => {
     expect(architecture.explanation).toContain('tokio-macros');
   });
 });
-

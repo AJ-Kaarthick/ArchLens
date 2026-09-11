@@ -154,4 +154,3 @@ describe('AI Fastify Routes', () => {
     expect(body.message).toBe('An internal error occurred while generating the AI explanation.');
   });
 });
-

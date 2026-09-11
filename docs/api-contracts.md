@@ -17,6 +17,9 @@ The shared package exports canonical Zod schemas and inferred TypeScript types:
 - `ExplainTopicSchema`: Valid AI explanation topics (`overview`, `architecture`, `tech-stack`, `entrypoints`).
 - `ExplainRequestSchema`: Request payload for AI explanations (`topic`, optional `target`).
 - `ExplainResponseSchema`: Complete grounded AI explanation payload with key takeaways, markdown explanation, citations, cache metadata, and provider info.
+- `SearchQuerySchema`: Request payload for semantic search (`query`, `limit`, optional `pathPrefix`, optional `category`).
+- `SearchResultItemSchema`: Single ranked chunk search result (`filePath`, `chunkIndex`, `startLine`, `endLine`, `content`, `score`, `language`, `category`).
+- `SearchResponseSchema`: Complete semantic search response (`query`, `results`, `totalMatches`, `durationMs`, `fallback`).
 - `ApiErrorSchema`: Standardized error envelope (`error`, `message`, `isRateLimit`, `suggestedAction`).
 
 ---
@@ -246,7 +249,71 @@ Generates or retrieves a cached grounded AI explanation for a previously analyze
 
 ---
 
-### 6. `GET /health`
+### 6. `POST /api/repositories/:owner/:repo/search`
+
+Executes semantic search over indexed code chunks for an analyzed repository.
+
+- **Path Parameters:**
+  - `owner`: Repository owner login.
+  - `repo`: Repository name.
+
+- **Request Body:**
+
+  ```json
+  {
+    "query": "drizzle connection pool postgres",
+    "limit": 5,
+    "pathPrefix": "apps/api",
+    "category": "source"
+  }
+  ```
+
+- **Query Options:**
+  - `query` (required, string, 2-300 chars): Search term or semantic description.
+  - `limit` (optional, integer, 1-20, default: 5): Maximum number of top matches to return.
+  - `pathPrefix` (optional, string): Filter results strictly to files matching this path prefix (e.g. `apps/web/src/`).
+  - `category` (optional, enum): Filter by file category (`source`, `test`, `config`, `doc`, `ci`, `asset`, `other`).
+
+- **Success Response (`200 OK`):**
+  Returns `SearchResponse`:
+
+  ```json
+  {
+    "query": "drizzle connection pool postgres",
+    "results": [
+      {
+        "filePath": "apps/api/src/db/index.ts",
+        "chunkIndex": 0,
+        "startLine": 1,
+        "endLine": 15,
+        "content": "import postgres from 'postgres';\nimport { drizzle } from 'drizzle-orm/postgres-js';...",
+        "score": 0.8421,
+        "language": "ts",
+        "category": "source"
+      }
+    ],
+    "totalMatches": 1,
+    "durationMs": 18,
+    "fallback": false
+  }
+  ```
+
+- **Dual-Mode Search & Fallback Semantics:**
+  - When `fallback: false`: Results are ranked using native `pgvector` HNSW vector cosine distance (`<=>`).
+  - When `fallback: true`: Results are computed using an exact in-memory vector cosine similarity ranking over serialized embeddings stored in PostgreSQL.
+  - _Operational Note:_ The standard local development container (`postgres:16-alpine`) lacks `pgvector`, so responses in local dev return `fallback: true`. This fallback is an intentional development and graceful-degradation mechanism, not equivalent to production `pgvector` HNSW retrieval. When combined with `MockEmbeddingProvider`, retrieval quality is suitable for offline testing, but broad or low-confidence queries may still return results. Production semantic evaluation requires real embeddings and a `pgvector`-enabled database.
+- **UI vs. API Capabilities:** The REST API accepts optional `pathPrefix` filtering (e.g. `"apps/api"`). The current web UI exposes controls for `query`, `category`, and `limit`, but does not currently expose a dedicated Path Prefix input.
+- **Zero Code Execution:** Semantic search operates purely on indexed static text slices and embeddings. Repository code is never executed.
+
+- **Error Responses:**
+  - `400 Bad Request`: When `query` is invalid, empty, or exceeds 300 characters.
+  - `404 Not Found`: When the repository has not been analyzed yet via `POST /api/analyze`.
+  - `429 Too Many Requests`: When the embedding provider rate limit is exceeded.
+  - `500 Internal Server Error`: Sanitized error message on unexpected server failures.
+
+---
+
+### 7. `GET /health`
 
 Liveness and version check.
 

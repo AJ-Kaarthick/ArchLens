@@ -14,6 +14,7 @@ import { MetricsView } from './components/MetricsView.tsx';
 import { FileTreeExplorer } from './components/FileTreeExplorer.tsx';
 import { LandmarkViewer } from './components/LandmarkViewer.tsx';
 import { AIInsightsView } from './components/AIInsightsView.tsx';
+import { SemanticSearchView } from './components/SemanticSearchView.tsx';
 import {
   Layers,
   Cpu,
@@ -31,9 +32,9 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'ai' | 'tech' | 'metrics' | 'tree'>(
-    'overview'
-  );
+  const [activeTab, setActiveTab] = useState<
+    'overview' | 'ai' | 'search' | 'tech' | 'metrics' | 'tree'
+  >('overview');
 
   const [landmarkContent, setLandmarkContent] = useState<LandmarkContent | null>(null);
   const [loadingLandmark, setLoadingLandmark] = useState(false);
@@ -278,6 +279,18 @@ export function App() {
               </button>
 
               <button
+                onClick={() => setActiveTab('search')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                  activeTab === 'search'
+                    ? 'bg-blue-600 text-white shadow'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Search size={14} className="text-cyan-400" />
+                Semantic Search
+              </button>
+
+              <button
                 onClick={() => setActiveTab('tech')}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition cursor-pointer ${
                   activeTab === 'tech'
@@ -325,6 +338,13 @@ export function App() {
             {activeTab === 'ai' && (
               <AIInsightsView
                 analysis={analysis}
+                onSelectFile={(path) => handleFetchLandmark(path)}
+              />
+            )}
+
+            {activeTab === 'search' && (
+              <SemanticSearchView
+                repository={analysis.repository}
                 onSelectFile={(path) => handleFetchLandmark(path)}
               />
             )}

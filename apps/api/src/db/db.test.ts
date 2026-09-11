@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { initDb, db, sql } from './index.js';
-import { repositories } from './schema.js';
+import { repositories, analyses, codeChunks } from './schema.js';
 import { eq } from 'drizzle-orm';
 
 describe('Database connection & schema', () => {
@@ -75,5 +75,70 @@ describe('Database connection & schema', () => {
 
     // Clean up
     await db.delete(repositories).where(eq(repositories.id, inserted.id));
+  });
+
+  it('stores code chunks linked to analysis and supports cascade delete', async () => {
+    const testOwner = `chunks-test-${Date.now()}`;
+    const testRepo = 'chunk-repo';
+
+    const [repo] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const [analysis] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repo.id,
+        techStack: [],
+        architecture: {
+          isMonorepo: false,
+          monorepoTool: null,
+          workspaces: [],
+          detectedPatterns: [],
+          primaryEntrypoints: [],
+          keyLandmarks: [],
+        },
+        metrics: { totalFiles: 0, totalBytes: 0, languages: {}, categories: {}, largestFiles: [] },
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    const [chunk] = await db
+      .insert(codeChunks)
+      .values({
+        analysisId: analysis.id,
+        filePath: 'src/index.ts',
+        chunkIndex: 0,
+        startLine: 1,
+        endLine: 40,
+        content: 'console.log("hello world");',
+        language: 'TypeScript',
+        category: 'source',
+        embedding: [0.1, 0.2, 0.3],
+        createdAt: new Date(),
+      })
+      .returning();
+
+    expect(chunk.id).toBeDefined();
+    expect(chunk.filePath).toBe('src/index.ts');
+    expect(chunk.embedding).toEqual([0.1, 0.2, 0.3]);
+
+    // Delete repo -> cascade deletes analysis and codeChunks
+    await db.delete(repositories).where(eq(repositories.id, repo.id));
+
+    const orphanChunks = await db
+      .select()
+      .from(codeChunks)
+      .where(eq(codeChunks.analysisId, analysis.id));
+    expect(orphanChunks).toHaveLength(0);
   });
 });

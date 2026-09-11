@@ -1,3 +1,4 @@
+import './src/config/env.js';
 import type { Config } from 'drizzle-kit';
 
 export default {

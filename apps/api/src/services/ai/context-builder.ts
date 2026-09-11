@@ -5,6 +5,12 @@ export interface BuildContextOptions {
   topic: ExplainTopic;
   target?: string | null;
   readmeExcerpt?: string | null;
+  retrievedChunks?: {
+    filePath: string;
+    startLine: number;
+    endLine: number;
+    content: string;
+  }[];
 }
 
 export interface GroundedContext {
@@ -42,6 +48,20 @@ export class ContextBuilder {
         )}\n</untrusted_content>`
       : 'None provided';
 
+    let sanitizedChunks = '';
+    if (options.retrievedChunks && options.retrievedChunks.length > 0) {
+      const formatted = options.retrievedChunks
+        .slice(0, 3)
+        .map(
+          (c) =>
+            `File: ${c.filePath} (lines ${c.startLine}-${c.endLine}):\n${ContextBuilder.sanitizeUntrustedText(
+              c.content,
+              600
+            )}`
+        )
+        .join('\n---\n');
+      sanitizedChunks = `Retrieved Code Slices (Localized Architectural Context):\n<untrusted_content source="semantic_retrieval">\n${formatted}\n</untrusted_content>`;
+    }
 
     // Format deterministic facts
     const facts = {
@@ -109,8 +129,8 @@ ${JSON.stringify(facts, null, 2)}
 Repository Description:
 ${sanitizedDescription}
 
-${sanitizedReadme ? `README Excerpt:\n${sanitizedReadme}` : ''}
-
+${sanitizedReadme ? `README Excerpt:\n${sanitizedReadme}\n` : ''}
+${sanitizedChunks ? `${sanitizedChunks}\n` : ''}
 ## TOPIC GOAL: ${topic.toUpperCase()}
 ${topicInstructions}
 
@@ -176,4 +196,3 @@ Provide 3 to 5 key takeaways and between 3 to 8 distinct evidence citations tied
     return bounded.replace(/<\/?untrusted_content[^>]*>/gi, '[stripped-delimiter]');
   }
 }
-

@@ -7,7 +7,7 @@ import type { IAIProvider } from './provider.interface.js';
 import { AIProviderFactory } from './provider.factory.js';
 import { ContextBuilder } from './context-builder.js';
 import { EvidenceValidator } from './evidence-validator.js';
-
+import { RetrievalService } from '../retrieval/retrieval.service.js';
 
 export class RepositoryNotAnalyzedError extends Error {
   readonly status = 404;
@@ -20,10 +20,18 @@ export class RepositoryNotAnalyzedError extends Error {
 export class AIService {
   private provider: IAIProvider;
   private repoService: RepositoryService;
+  private retrievalService: RetrievalService;
 
-  constructor(customProvider?: IAIProvider, customRepoService?: RepositoryService) {
+  constructor(
+    customProvider?: IAIProvider,
+    customRepoService?: RepositoryService,
+    customRetrievalService?: RetrievalService
+  ) {
     this.provider = customProvider || AIProviderFactory.create();
     this.repoService = customRepoService || repositoryService;
+    this.retrievalService =
+      customRetrievalService ||
+      new RetrievalService(undefined, undefined, undefined, this.repoService);
   }
 
   async explain(owner: string, repo: string, request: ExplainRequest): Promise<ExplainResponse> {
@@ -88,12 +96,42 @@ export class AIService {
       // README fetch is optional; continue if missing or rate limited
     }
 
-    // 4. Build prompt-injection-safe bounded context
+    // 4. Fetch optional semantic retrieval chunks for localized architectural context
+    let retrievedChunks:
+      { filePath: string; startLine: number; endLine: number; content: string }[] | undefined;
+    if (cleanTarget || cleanTopic === 'entrypoints' || cleanTopic === 'architecture') {
+      try {
+        const searchQuery =
+          cleanTarget ||
+          (cleanTopic === 'entrypoints'
+            ? 'application startup entrypoint bootstrap listener'
+            : 'architectural modular pattern boundaries');
+        const searchRes = await this.retrievalService.search(
+          cleanOwner,
+          cleanRepo,
+          { query: searchQuery, limit: 3, pathPrefix: cleanTarget || undefined },
+          analysisId
+        );
+        if (searchRes.results.length > 0) {
+          retrievedChunks = searchRes.results.map((r) => ({
+            filePath: r.filePath,
+            startLine: r.startLine,
+            endLine: r.endLine,
+            content: r.content,
+          }));
+        }
+      } catch {
+        // Retrieval is complementary; continue gracefully on any error
+      }
+    }
+
+    // 5. Build prompt-injection-safe bounded context
     const groundedContext = ContextBuilder.build({
       analysis,
       topic: cleanTopic,
       target: cleanTarget,
       readmeExcerpt,
+      retrievedChunks,
     });
 
     // 5. Query AI provider
@@ -144,7 +182,6 @@ export class AIService {
       cached: false,
     };
   }
-
 }
 
 export const aiService = new AIService();

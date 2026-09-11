@@ -38,7 +38,6 @@ describe('GeminiAIProvider', () => {
     expect(customProvider.model).toBe('gemini-1.5-pro');
   });
 
-
   it('successfully parses valid JSON response from Gemini', async () => {
     const provider = new GeminiAIProvider({ apiKey: 'test-fake-key' });
     const mockClient = (provider as any).client;
@@ -128,4 +127,3 @@ describe('GeminiAIProvider', () => {
     }
   });
 });
-
