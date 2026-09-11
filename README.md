@@ -8,9 +8,9 @@ ArchLens is an open-source platform that enables developers, contributors, and t
 
 ## Project Status
 
-**Current Status:** Phase 2 Complete (Deterministic Ingestion & Architecture Analysis).
+**Current Status:** Phase 3 Complete (Deterministic Ingestion, Architecture Analysis & Grounded AI Explanations).
 
-ArchLens currently features a fully functional, deterministic analysis engine and React explorer. AI-assisted capabilities, semantic search, and embeddings are planned for Phase 3+ and are **not** present in the current codebase.
+ArchLens features a fully functional, deterministic repository analysis engine, paired with a grounded AI reasoning layer and an interactive React explorer. Vector databases, code embeddings, and semantic search are planned for Phase 4+.
 
 ---
 
@@ -22,11 +22,11 @@ Gaining a quick, accurate mental model of a new or unfamiliar repository is trad
 - **Environment friction:** Requiring specific language toolchains, SDK versions, or container daemons just to evaluate a project.
 - **AI hallucination risks:** Off-the-shelf LLMs routinely guess project dependencies, hallucinate outdated patterns, and misstate repository structures when ungrounded.
 
-ArchLens solves this by establishing a **factual, deterministic baseline** first. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any secondary reasoning occurs.
+ArchLens solves this by establishing a **factual, deterministic baseline** first. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any AI reasoning occurs. AI reasoning is strictly constrained to explaining verified facts with verifiable evidence citations.
 
 ---
 
-## What Works Today (Phase 1 & Phase 2)
+## What Works Today (Phase 1, Phase 2 & Phase 3)
 
 - **Bounded GitHub Ingestion:** Fetches repository metadata and recursive file trees via the GitHub REST API v3 without git cloning.
 - **Safety Bounds:** Enforces a strict 10,000-item tree bound and a 256 KB landmark file preview bound to prevent denial-of-service and memory exhaustion.
@@ -34,9 +34,15 @@ ArchLens solves this by establishing a **factual, deterministic baseline** first
 - **Deterministic Tech Stack Detection:** Accurately extracts dependencies, build systems, styling engines, test runners, and database libraries from manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, etc.) with confidence levels and source evidence.
 - **Architecture Pattern Detection:** Automatically identifies monorepo tools (`pnpm`, `Turborepo`, `Nx`, `Lerna`), workspace packages, client-server separation, layered service directories, and primary entrypoints.
 - **Structural Metrics:** Computes language breakdowns, file category distributions, total bytes, and identifies top 10 largest files.
-- **PostgreSQL + Drizzle Persistence:** Stores repositories and historical analysis runs with an idempotent schema and conflict-safe upserts on `(owner, name)`.
-- **Fastify REST API:** Synchronous endpoints for on-demand analysis, cached analysis retrieval, and bounded landmark file fetching.
-- **React Web Explorer:** Modern UI built with Tailwind CSS, Lucide icons, interactive collapsible file tree with real-time filtering, metric progress bars, and safe `react-markdown` document previewing.
+- **Grounded AI Explanation Layer:** Generates fact-backed architectural explanations across four distinct topics: Repository Overview, Architecture & Patterns, Tech Stack Synergy, and Runtime Entrypoints.
+- **Evidence Citations:** Every AI explanation includes verifiable citations pointing directly to real manifests, landmark files, dependencies, entrypoints, and structural metrics.
+- **Prompt-Injection Defense:** Untrusted repository content (README and description) is bounded to 2,000 characters and isolated in `<untrusted_content>` tags, preventing malicious repository instructions from subverting AI reasoning.
+- **AI Provider Abstraction:** Flexible backend interface (`IAIProvider`) supporting Google Gemini (`gemini-2.0-flash` via `@google/genai`) and a deterministic `MockAIProvider` for 100% offline development and testing without API keys.
+
+- **PostgreSQL Explanation Caching:** Explanations are cached in the `ai_explanations` table keyed on `(analysis_id, topic, target)`. Re-requesting an explanation for a previously analyzed snapshot costs zero AI tokens and returns with sub-millisecond database latency.
+- **PostgreSQL + Drizzle Persistence:** Stores repositories, historical analysis runs, and explanations with an idempotent schema and conflict-safe upserts on `(owner, name)`.
+- **Fastify REST API:** Synchronous endpoints for on-demand analysis, cached analysis retrieval, bounded landmark file fetching, and AI explanations (`POST /api/repositories/:owner/:repo/explain`).
+- **React Web Explorer:** Modern UI built with Tailwind CSS, Lucide icons, interactive collapsible file tree with real-time filtering, metric progress bars, safe `react-markdown` document previewing, and an interactive **AI Insights** tab.
 
 ---
 
@@ -140,15 +146,19 @@ docker run -d \
 
 The backend accepts the following optional environment variables:
 
-| Variable       | Description                                                                                                   | Default                                                |
-| -------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `DATABASE_URL` | PostgreSQL connection string                                                                                  | `postgres://postgres:postgres@localhost:5432/archlens` |
-| `GITHUB_TOKEN` | Optional GitHub Personal Access Token (server-side only) to increase REST rate limits from 60 to 5,000 req/hr | _None_                                                 |
-| `PORT`         | API server port                                                                                               | `3000`                                                 |
-| `HOST`         | API server host interface                                                                                     | `0.0.0.0`                                              |
+| Variable         | Description                                                                                                   | Default                                                |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `DATABASE_URL`   | PostgreSQL connection string                                                                                  | `postgres://postgres:postgres@localhost:5432/archlens` |
+| `GITHUB_TOKEN`   | Optional GitHub Personal Access Token (server-side only) to increase REST rate limits from 60 to 5,000 req/hr | _None_                                                 |
+| `GEMINI_API_KEY` | Optional Google Gemini API key (server-side only). When omitted, ArchLens uses `MockAIProvider` gracefully    | _None_                                                 |
+| `AI_PROVIDER`    | AI provider override (`gemini` or `mock`). Defaults to `gemini` if API key present, otherwise `mock`          | `gemini` (if key set) / `mock`                         |
+| `GEMINI_MODEL`   | Gemini model name                                                                                             | `gemini-2.0-flash`                                     |
+
+| `PORT`           | API server port                                                                                               | `3000`                                                 |
+| `HOST`           | API server host interface                                                                                     | `0.0.0.0`                                              |
 
 > [!NOTE]
-> `GITHUB_TOKEN` is strictly consumed server-side inside `apps/api`. It is never bundled, passed, or exposed to `apps/web` or `packages/shared`.
+> `GITHUB_TOKEN` and `GEMINI_API_KEY` are strictly consumed server-side inside `apps/api`. They are never bundled, passed, or exposed to `apps/web` or `packages/shared`.
 
 ### 4. Build Workspace Packages
 
@@ -232,6 +242,14 @@ Safely reads bounded content for a specific repository file (e.g. `README.md`).
 - **Response (200):** `{ path, name, size, content, encoding, isTruncated }`
 - **Security:** Directory traversal (`..`) is strictly blocked.
 
+### `POST /api/repositories/:owner/:repo/explain`
+
+Generates or retrieves a cached grounded AI explanation for an analyzed repository.
+
+- **Payload:** `{ "topic": "overview" | "architecture" | "tech-stack" | "entrypoints", "target": "optional/target/path" }`
+- **Response (200):** `ExplainResponse` (summary, markdown explanation, key takeaways, grounded evidence citations, cache status)
+- **Caching:** Automatically cached in PostgreSQL; repeated requests return immediately at zero token cost.
+
 ### `GET /health`
 
 Liveness check returning service status and shared contract version.
@@ -250,7 +268,7 @@ Liveness check returning service status and shared contract version.
 
 - **[x] Phase 1:** Monorepo Foundation, shared Zod contracts, strict tooling.
 - **[x] Phase 2:** Bounded GitHub REST ingestion, deterministic analysis, PostgreSQL persistence, React web explorer.
-- **[ ] Phase 3:** _Planned_ — Provider-agnostic AI abstraction (Gemini, OpenAI, Anthropic), incremental UI.
+- **[x] Phase 3:** Grounded AI repository understanding, provider abstraction (Gemini & Mock), deterministic evidence validation, PostgreSQL caching, and interactive AI Insights UI.
 - **[ ] Phase 4:** _Planned_ — Advanced semantic retrieval and structured code intelligence.
 - **[ ] Phase 5:** _Planned_ — Product refinement, UX polish, and deep visualization.
 - **[ ] Phase 6:** _Planned_ — Production hardening, caching, queue workers, and public deployment.
@@ -260,7 +278,9 @@ Liveness check returning service status and shared contract version.
 
 ## Security
 
-- **No Secret Leakage:** GitHub credentials are never forwarded to the client or embedded in client bundles.
+- **No Secret Leakage:** GitHub credentials (`GITHUB_TOKEN`) and AI provider keys (`GEMINI_API_KEY`) are strictly loaded server-side in `apps/api` and are never forwarded to the client or embedded in client bundles.
+- **Prompt-Injection Defense:** Untrusted repository content (README and description) is bounded to 2,000 characters, stripped of delimiter tags (`</?untrusted_content[^>]*>`), and isolated inside `<untrusted_content>` tags with strict system instructions prohibiting execution of untrusted instructions.
+- **Deterministic Evidence Validation:** All AI-generated citations are audited post-generation against verified Phase 2 analysis facts by `EvidenceValidator` before persistence or client delivery.
 - **Input Sanitization:** URL parsing and path parameters are validated via Zod schemas and normalized to prevent path traversal (`../`) attacks.
 - **Sanitized Document Rendering:** Markdown files (`README.md`, docs) are rendered safely using React Markdown without executing embedded scripts.
 

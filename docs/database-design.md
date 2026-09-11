@@ -4,7 +4,7 @@ ArchLens uses **PostgreSQL** as its persistence layer, managed through **Drizzle
 
 ---
 
-## Schema Overview (Phase 2)
+## Schema Overview (Phase 3)
 
 ```
 ┌────────────────────────────────────────┐
@@ -36,6 +36,24 @@ ArchLens uses **PostgreSQL** as its persistence layer, managed through **Drizzle
 │ metrics: jsonb NOT NULL                │
 │ tree: jsonb NOT NULL                   │
 │ analyzed_at: timestamptz NOT NULL      │
+└──────────────────┬─────────────────────┘
+                   │ 1
+                   │
+                   │ N
+┌──────────────────▼─────────────────────┐
+│            ai_explanations             │
+├────────────────────────────────────────┤
+│ id: serial PK                          │
+│ analysis_id: integer FK (cascade)     │
+│ topic: text NOT NULL                   │
+│ target: text                           │
+│ summary: text NOT NULL                 │
+│ explanation: text NOT NULL             │
+│ key_takeaways: jsonb NOT NULL          │
+│ evidence: jsonb NOT NULL               │
+│ provider: text NOT NULL                │
+│ model: text NOT NULL                   │
+│ created_at: timestamptz NOT NULL       │
 └────────────────────────────────────────┘
 ```
 
@@ -60,6 +78,16 @@ Stores historical analysis snapshots linked to a repository.
 - **Index:** `CREATE INDEX IF NOT EXISTS analyses_repo_analyzed_at_idx ON analyses (repository_id, analyzed_at DESC);` to ensure instant retrieval of the latest analysis.
 - **JSONB Payloads:** Structured analysis results (`tech_stack`, `architecture`, `metrics`, `tree`) are persisted as validated JSONB documents adhering to `@archlens/shared` Zod contracts.
 
+### 3. `ai_explanations`
+
+Stores grounded AI explanations linked to a specific analysis snapshot.
+
+- **Foreign Key:** `analysis_id` references `analyses(id)` with `ON DELETE CASCADE`.
+- **Unique Constraint / Index:**
+  `CREATE UNIQUE INDEX IF NOT EXISTS ai_explanations_unique ON ai_explanations (analysis_id, topic, COALESCE(target, ''));`
+- **Zero-Token Latency Caching:** When an explanation for `(analysis_id, topic, target)` is requested, the cached record is returned immediately without invoking external AI providers. If a repository is re-analyzed via `POST /api/analyze`, a new `analysis_id` is created, naturally invalidating stale cache entries.
+- **JSONB Payloads:** `key_takeaways` (array of bullet points) and `evidence` (array of typed citations) are persisted as validated JSONB documents.
+
 ---
 
 ## Initialization & Migrations
@@ -73,4 +101,4 @@ Stores historical analysis snapshots linked to a repository.
 
 ## Future Considerations (Phase 4+)
 
-Phase 2 uses purely structured relational + JSONB persistence. When semantic search and AI retrieval are developed in Phase 4, `pgvector` will be evaluated to store code chunk embeddings directly within PostgreSQL, maintaining an operationally simple single-database architecture.
+Phase 3 uses purely structured relational + JSONB persistence. When semantic search and AI retrieval are developed in Phase 4, `pgvector` will be evaluated to store code chunk embeddings directly within PostgreSQL, maintaining an operationally simple single-database architecture.

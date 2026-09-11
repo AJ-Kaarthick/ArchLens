@@ -104,7 +104,10 @@ export class RepositoryService {
     return analysis;
   }
 
-  async getLatestAnalysis(owner: string, repo: string): Promise<AnalysisResult | null> {
+  async getLatestAnalysisWithRecord(
+    owner: string,
+    repo: string
+  ): Promise<{ analysis: AnalysisResult; analysisId: number; repositoryId: number } | null> {
     const cleanOwner = owner.trim();
     const cleanRepo = repo.trim().replace(/\.git$/, '');
 
@@ -148,7 +151,7 @@ export class RepositoryService {
       updatedAt: repoRow.updatedAt.toISOString(),
     };
 
-    return {
+    const analysis: AnalysisResult = {
       repository,
       commitSha: analysisRow.commitSha,
       techStack: analysisRow.techStack,
@@ -157,6 +160,17 @@ export class RepositoryService {
       tree: analysisRow.tree,
       analyzedAt: analysisRow.analyzedAt.toISOString(),
     };
+
+    return {
+      analysis,
+      analysisId: analysisRow.id,
+      repositoryId: repoRow.id,
+    };
+  }
+
+  async getLatestAnalysis(owner: string, repo: string): Promise<AnalysisResult | null> {
+    const record = await this.getLatestAnalysisWithRecord(owner, repo);
+    return record ? record.analysis : null;
   }
 
   async getLandmarkContent(

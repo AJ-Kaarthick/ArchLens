@@ -9,7 +9,7 @@ ArchLens follows a staged, milestone-driven development roadmap. Each phase deli
 - Shared contracts package (`@archlens/shared`) with Zod schemas
 - ESLint and Prettier setup
 
-## Phase 2: Repository Ingestion & Deterministic Analysis — Current / Completed
+## Phase 2: Repository Ingestion & Deterministic Analysis — Completed
 
 - Bounded GitHub REST API ingestion (recursive Git Trees, no cloning)
 - 10,000-item tree bound and 256 KB landmark file size bound
@@ -22,12 +22,19 @@ ArchLens follows a staged, milestone-driven development roadmap. Each phase deli
 - Synchronous REST API in Fastify
 - Interactive React web explorer UI with real-time tree filter and safe `react-markdown` preview
 
-## Phase 3: AI Provider Abstraction & Incremental Frontend — Planned
+## Phase 3: Grounded AI Explanation Layer & Caching — Completed
 
-- Provider-agnostic AI interface (`IAIProvider`) in `apps/api`
-- Implementations for Gemini, OpenAI, and Anthropic
-- Grounded summaries generated strictly from deterministic Phase 2 analysis facts
-- Streaming AI responses to the frontend client
+- Backend AI provider abstraction (`IAIProvider`) in `apps/api`
+- Google Gemini implementation (`GeminiAIProvider`) using `@google/genai` (default: `gemini-2.0-flash`)
+- Deterministic mock provider (`MockAIProvider`) with dynamic multi-language grounding for offline development and testing
+- Provider factory (`AIProviderFactory`) with automatic fallback when API keys are absent
+- Prompt-injection defense: bounded context (2,000 chars) and delimiter-sanitized `<untrusted_content>` wrapping via `ContextBuilder`
+- Grounded explanation topics: Overview, Architecture & Patterns, Tech Stack Synergy, Runtime Entrypoints
+- Deterministic post-validation (`EvidenceValidator`): Audits all AI-generated citations against verified Phase 2 facts to prevent hallucinated references
+- Citation-backed evidence ties claims directly to real manifests, files, patterns, and metrics
+- PostgreSQL explanation caching (`ai_explanations`) keyed on `(analysis_id, topic, COALESCE(target, ''))` for zero-token replay
+- Fastify route: `POST /api/repositories/:owner/:repo/explain` with structured error handling and rate-limit recovery
+- Interactive React UI: `AIInsightsView` tab with topic controls, executive summary, takeaways, and evidence badges
 
 ## Phase 4: Advanced Semantic Retrieval — Planned
 

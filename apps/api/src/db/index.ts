@@ -56,4 +56,25 @@ export async function initDb(): Promise<void> {
     CREATE INDEX IF NOT EXISTS analyses_repo_analyzed_at_idx
     ON analyses (repository_id, analyzed_at DESC);
   `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS ai_explanations (
+      id SERIAL PRIMARY KEY,
+      analysis_id INTEGER NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+      topic TEXT NOT NULL,
+      target TEXT,
+      summary TEXT NOT NULL,
+      explanation TEXT NOT NULL,
+      key_takeaways JSONB NOT NULL,
+      evidence JSONB NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+  `;
+
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS ai_explanations_unique
+    ON ai_explanations (analysis_id, topic, COALESCE(target, ''));
+  `;
 }

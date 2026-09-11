@@ -4,6 +4,7 @@ import type {
   ArchitectureOverview,
   StructuralMetrics,
   FileTreeItem,
+  EvidenceCitation,
 } from '@archlens/shared';
 
 export const repositories = pgTable(
@@ -39,7 +40,25 @@ export const analyses = pgTable('analyses', {
   analyzedAt: timestamp('analyzed_at', { withTimezone: true }).notNull(),
 });
 
+export const aiExplanations = pgTable('ai_explanations', {
+  id: serial('id').primaryKey(),
+  analysisId: integer('analysis_id')
+    .notNull()
+    .references(() => analyses.id, { onDelete: 'cascade' }),
+  topic: text('topic').notNull(),
+  target: text('target'),
+  summary: text('summary').notNull(),
+  explanation: text('explanation').notNull(),
+  keyTakeaways: jsonb('key_takeaways').$type<string[]>().notNull(),
+  evidence: jsonb('evidence').$type<EvidenceCitation[]>().notNull(),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+});
+
 export type RepositoryRecord = typeof repositories.$inferSelect;
 export type InsertRepositoryRecord = typeof repositories.$inferInsert;
 export type AnalysisRecord = typeof analyses.$inferSelect;
 export type InsertAnalysisRecord = typeof analyses.$inferInsert;
+export type AIExplanationRecord = typeof aiExplanations.$inferSelect;
+export type InsertAIExplanationRecord = typeof aiExplanations.$inferInsert;

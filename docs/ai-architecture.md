@@ -1,70 +1,161 @@
 # AI Architecture
 
-> [!IMPORTANT]
-> **Current Status (Phase 2):** There is **no AI functionality, AI SDK, embedding pipeline, or model integration** in ArchLens today. The entire Phase 2 ingestion and analysis engine is 100% deterministic. This document defines the design and constraints for **Phase 3 (Planned)**.
+> [!NOTE]
+> **Status:** Phase 3 Complete — AI-Powered Repository Understanding grounded in deterministic Phase 2 facts.
 
 ---
 
-## Core Philosophy for Phase 3
+## Core Philosophy
 
-When AI capabilities are introduced in Phase 3, they will follow three foundational principles:
+ArchLens implements an AI reasoning layer built strictly on the principle:
 
-1. **Grounded in Deterministic Facts:** AI generation must never guess repository dependencies or structure. Prompts will strictly inject facts already verified by Phase 2 (parsed manifests, verified tech stack detections, architectural patterns, file metrics).
-2. **Provider Agnostic:** Users and self-hosters must not be locked into a single AI provider. ArchLens will abstract model interactions through a clean interface.
-3. **Zero Client-Side Secrets:** All AI orchestration, provider SDKs, and API credentials will reside exclusively in `apps/api`. `apps/web` will only consume processed responses or streams.
+$$\text{Deterministic Analysis} \longrightarrow \text{Structured Facts} \longrightarrow \text{AI Reasoning} \longrightarrow \text{Grounded Explanation}$$
+
+AI must enhance ArchLens's comprehension, not serve as an ungrounded, hallucinating source of truth for repository facts.
+
+### Foundational Principles
+
+1. **Grounded in Deterministic Facts:** Every claim, metric, framework detection, and architectural deduction is tied to facts already verified by Phase 2 (manifests, AST patterns, file trees, structural metrics).
+2. **Zero Hallucination with Evidence Citations:** Explanations produce structured `evidence` citations referencing real repository files, manifests, entrypoints, dependencies, or metrics.
+3. **Provider Agnostic Abstraction:** Model interactions are encapsulated behind the backend `IAIProvider` interface with factory dispatch (`GeminiAIProvider` and deterministic `MockAIProvider`).
+4. **Security & Prompt-Injection Resistance:** Untrusted user input (repository descriptions and README excerpts) are bounded to 2,000 characters and stripped of `<untrusted_content>` delimiter tags before being isolated inside `<untrusted_content>` tags. The model is explicitly instructed never to execute instructions from untrusted content.
+5. **Zero Client-Side Secrets:** All AI orchestration and API credentials (`GEMINI_API_KEY`) reside exclusively on the server in `apps/api`. `apps/web` receives only validated JSON contracts.
+6. **Cost-Free Replay Caching:** Generated explanations are cached in PostgreSQL keyed on `(analysis_id, topic, COALESCE(target, ''))`. Re-requesting an explanation for a previously analyzed commit costs zero AI tokens and returns instantly.
 
 ---
 
-## Planned Architecture
+## Architecture Flow
 
 ```
-[apps/web] (React)
+[apps/web] (React UI - AI Insights Tab)
        │
-       ▼ (REST / Server-Sent Events)
-[apps/api] (Fastify)
+       ▼ (POST /api/repositories/:owner/:repo/explain)
+[apps/api] (Fastify Route)
        │
        ▼
-[AI Orchestrator] ── Reads ──► [PostgreSQL Analysis Records] (Phase 2 Facts)
+[AIService]
+       ├─► 1. Check PostgreSQL `ai_explanations` Cache (analysis_id, topic, target)
+       │      └─► Hit: Return cached explanation (cached: true, 0ms token latency)
+       │
+       ▼ Miss:
+[ContextBuilder]
+       ├─► Loads Phase 2 deterministic analysis facts (manifests, tree, metrics)
+       ├─► Bounded & delimiter-sanitized README excerpt (<untrusted_content>)
+       └─► Generates grounded prompt with strict JSON schema constraints
        │
        ▼
 [IAIProvider Interface]
-       ├─► GeminiProvider   (Google GenAI / Vertex)
-       ├─► OpenAIProvider   (GPT-4o / GPT-4o-mini)
-       └─► AnthropicProvider(Claude 3.5 Sonnet)
+       ├─► GeminiAIProvider   (@google/genai, gemini-2.0-flash, 15s timeout)
+       └─► MockAIProvider     (Deterministic, offline dynamic heuristic from AnalysisResult)
+       │
+       ▼
+[EvidenceValidator] (Deterministic Grounding Audit)
+       ├─► Validates files/manifests/entrypoints against indexed git tree & landmarks
+       ├─► Validates dependencies against detected tech stack
+       ├─► Validates patterns & metrics against Phase 2 results
+       └─► Discards hallucinations; synthesizes verified fallbacks if needed
+       │
+       ▼
+[PostgreSQL Cache] ── Stores in `ai_explanations` table
+       │
+       ▼
+[ExplainResponse JSON] ── Returned to client
 ```
 
 ---
 
-## Planned Interface (`IAIProvider`)
+## Provider Abstraction (`IAIProvider`)
 
-Phase 3 will define a standardized provider interface in `apps/api`:
+Located in `apps/api/src/services/ai/provider.interface.ts`:
 
 ```typescript
-export interface IAIProvider {
-  readonly providerName: string;
+export class AIRateLimitError extends Error {
+  readonly status = 429;
+  readonly isRateLimit = true;
+  readonly suggestedAction: string;
+  // ...
+}
 
-  generateSummary(context: AnalysisResult): Promise<string>;
-  streamExplanation(context: AnalysisResult, prompt: string): AsyncIterable<string>;
+export interface AIExplanationRequest {
+  topic: ExplainTopic;
+  target?: string | null;
+  context: string;
+  repoName: string;
+  analysis?: AnalysisResult;
+}
+
+export interface AIExplanationResult {
+  summary: string;
+  explanation: string;
+  keyTakeaways: string[];
+  evidence: EvidenceCitation[];
+  provider: string;
+  model: string;
+}
+
+export interface IAIProvider {
+  readonly name: string;
+  readonly model: string;
+  explain(request: AIExplanationRequest): Promise<AIExplanationResult>;
 }
 ```
 
+### Implementations
+
+1. **`GeminiAIProvider` (`apps/api/src/services/ai/providers/gemini.provider.ts`):**
+   - Utilizes the official `@google/genai` SDK.
+   - Default model: `gemini-2.0-flash` (configurable via `GEMINI_MODEL`).
+   - Enforces a 15-second request timeout with `AbortController`.
+   - Structured JSON output with markdown fence stripping and Zod validation.
+   - Maps quota and 429 status responses to `GeminiRateLimitError` (extending `AIRateLimitError`).
+
+2. **`MockAIProvider` (`apps/api/src/services/ai/providers/mock.provider.ts`):**
+   - Dynamically constructs grounded, structured explanations and verified citations directly from `request.analysis` facts.
+   - Supports any language ecosystem (Rust, Python, Go, TypeScript, etc.) without network calls.
+   - Enables 100% offline development, automated CI tests, and graceful fallback when `GEMINI_API_KEY` is not provided.
+
+3. **`AIProviderFactory` (`apps/api/src/services/ai/provider.factory.ts`):**
+   - Inspects `AI_PROVIDER` and `GEMINI_API_KEY`.
+   - Automatically selects `GeminiAIProvider` when configured, or falls back to `MockAIProvider` gracefully.
+
 ---
 
-## Prompt Design & Grounding Pipeline
+## Evidence Grounding & Deterministic Validation (`EvidenceValidator`)
 
-Instead of asking an LLM to "explain this repository" blindly:
+Located in `apps/api/src/services/ai/evidence-validator.ts`.
 
-1. ArchLens loads the deterministic `AnalysisResult` (monorepo status, entrypoints, top dependencies, language metrics).
-2. ArchLens selects relevant landmark documents (e.g. `README.md`, key architecture guides).
-3. A structured system prompt provides these facts as immutable context.
-4. The model produces an architectural walkthrough that is verifiable against the repository's real files.
+To maintain ArchLens's core invariant that **AI reasoning must never fabricate repository facts**, model outputs are deterministically validated before persistence:
+
+- **File, Manifest, and Entrypoint Citations**: Must correspond to real files in the repository's indexed git tree or detected landmark set.
+- **Dependency Citations**: Must match detected packages in `analysis.techStack`.
+- **Pattern Citations**: Must correspond to detected architectural patterns in `analysis.architecture.detectedPatterns`.
+- **Metric Citations**: Must correspond to calculated language metrics in `analysis.metrics`.
+
+Any citation that fails cross-validation against the Phase 2 `AnalysisResult` is discarded. If all candidate citations are rejected, `EvidenceValidator.synthesizeGroundedCitations` generates verified citations directly from actual repository landmarks, manifests, and metrics.
 
 ---
 
-## Phasing & Evolution
+## Supported Explanation Topics
 
-| Phase           | Milestone                         | Scope                                                                               |
-| --------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
-| **Phase 1 & 2** | Foundation & Deterministic Engine | **Current** — Zero AI, zero vendor SDKs.                                            |
-| **Phase 3**     | AI Provider Abstraction           | **Planned** — `IAIProvider`, Gemini/OpenAI/Anthropic adapters, streaming summaries. |
-| **Phase 4**     | Semantic Retrieval                | **Planned** — Code chunking, semantic search, evaluation of `pgvector`.             |
+- **`overview`**: High-level repository purpose, scale, structural layout, and core language breakdown.
+- **`architecture`**: In-depth patterns (monorepo packages, service-repository layer, microservices, MVC) and cross-boundary responsibilities.
+- **`tech-stack`**: Synergy analysis explaining how detected runtimes, frameworks, build systems, and databases interact.
+- **`entrypoints`**: System boot sequences, server listeners, CLI entrypoints, and runtime execution flow.
+
+---
+
+## Evidence Citations
+
+Every explanation response includes an `evidence` array citing factual sources:
+
+```json
+{
+  "type": "manifest",
+  "label": "Build Manifest",
+  "reference": "package.json",
+  "description": "Declares project dependencies and build lifecycle scripts."
+}
+```
+
+Citation types include: `file`, `manifest`, `entrypoint`, `dependency`, `metric`, and `pattern`.
+The web interface displays clickable evidence badges allowing direct inspection of referenced files.

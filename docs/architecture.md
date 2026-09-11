@@ -20,9 +20,9 @@ ArchLens is designed around a modular `pnpm` workspaces monorepo, enforcing stri
   - Ingests repository metadata and trees via bounded GitHub REST API calls.
   - Executes the deterministic analysis pipeline (categorization, manifests, tech stack, architecture, metrics).
   - Manages database persistence (PostgreSQL + Drizzle ORM).
-  - Holds all environment secrets (`GITHUB_TOKEN`, `DATABASE_URL`).
+  - Holds all environment secrets (`GITHUB_TOKEN`, `GEMINI_API_KEY`, `DATABASE_URL`).
 - **`packages/shared`**: Shared contract layer.
-  - Canonical source of truth for Zod schemas (`RepoInputSchema`, `AnalysisResultSchema`, `LandmarkContentSchema`, `ApiErrorSchema`).
+  - Canonical source of truth for Zod schemas (`RepoInputSchema`, `AnalysisResultSchema`, `LandmarkContentSchema`, `ExplainRequestSchema`, `ExplainResponseSchema`, `ApiErrorSchema`).
   - Inferred TypeScript domain types consumed identically by client and server.
   - Pure TypeScript with zero runtime overhead or dependencies beyond Zod.
 - **`packages/tsconfig` & `packages/eslint-config`**: Shared build and linting foundations.
@@ -36,19 +36,29 @@ The backend is structured into decoupled, single-responsibility modules:
 ```
 apps/api/src/
 ├── db/
-│   ├── schema.ts          # Drizzle tables (repositories, analyses)
+│   ├── schema.ts          # Drizzle tables (repositories, analyses, ai_explanations)
 │   └── index.ts           # Postgres connection & idempotent initDb()
 ├── services/
 │   ├── github.service.ts  # Bounded GitHub REST client & rate limit handling
 │   ├── repository.service.ts # Ingestion orchestration & Postgres upserts
-│   └── analyzer/
-│       ├── categorizer.ts # File categorization & landmark detection
-│       ├── tech-stack.ts  # Manifest & tree-based tech stack detection
-│       ├── architecture.ts# Monorepo & pattern detection
-│       ├── metrics.ts     # Structural and language metrics
-│       └── index.ts       # Orchestrator producing AnalysisResult
+│   ├── analyzer/
+│   │   ├── categorizer.ts # File categorization & landmark detection
+│   │   ├── tech-stack.ts  # Manifest & tree-based tech stack detection
+│   │   ├── architecture.ts# Monorepo & pattern detection
+│   │   ├── metrics.ts     # Structural and language metrics
+│   │   └── index.ts       # Orchestrator producing AnalysisResult
+│   └── ai/
+│       ├── provider.interface.ts # IAIProvider & AIRateLimitError contracts
+│       ├── provider.factory.ts   # Provider instantiation & fallback
+│       ├── context-builder.ts    # Prompt construction & injection defense
+│       ├── evidence-validator.ts # Deterministic citation validation
+│       ├── ai.service.ts         # Orchestration & PostgreSQL caching
+│       └── providers/
+│           ├── gemini.provider.ts# Google Gemini (@google/genai)
+│           └── mock.provider.ts  # Deterministic offline heuristic
 ├── routes/
-│   └── repository.routes.ts # Fastify REST endpoints
+│   ├── repository.routes.ts # Analysis & landmark REST endpoints
+│   └── ai.routes.ts         # Grounded explanation endpoint (/explain)
 └── server.ts              # App factory, CORS, and startup bootstrap
 ```
 
@@ -59,5 +69,5 @@ apps/api/src/
 1. **No Blind Cloning:** Repositories are analyzed via bounded REST API ingestion of tree and manifest data. Full repository cloning is disabled by design.
 2. **Deterministic Baseline:** All tech stack detections and metrics are calculated deterministically from verified source manifests and tree patterns.
 3. **Idempotent Storage:** Repositories are keyed on `(owner, name)` with conflict-safe upserts, ensuring duplicate ingestion runs remain consistent.
-4. **Isolated AI Layer (Phase 3):** When AI features are added in Phase 3, they will be confined to `apps/api` behind an `IAIProvider` interface, consuming already-verified Phase 2 analysis facts.
+4. **Isolated AI Layer (Phase 3 Complete):** The AI reasoning layer is strictly confined to `apps/api` behind the `IAIProvider` interface. AI consumes already-verified Phase 2 facts, validates every citation via `EvidenceValidator`, and caches results in PostgreSQL.
 5. **Deferred Clients (Phase 7+):** Browser extensions and desktop clients will act as consumers of the existing `apps/api` and `@archlens/shared` layers without backend architectural modifications.

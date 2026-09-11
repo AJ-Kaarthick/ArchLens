@@ -4,9 +4,15 @@ import { ARCHLENS_VERSION } from '@archlens/shared';
 import { initDb } from './db/index.js';
 import { createRepositoryRoutes } from './routes/repository.routes.js';
 import { RepositoryService } from './services/repository.service.js';
+import { createAiRoutes } from './routes/ai.routes.js';
+import { AIService } from './services/ai/ai.service.js';
 
 export function buildApp(
-  options: { logger?: boolean; repositoryService?: RepositoryService } = {}
+  options: {
+    logger?: boolean;
+    repositoryService?: RepositoryService;
+    aiService?: AIService;
+  } = {}
 ): FastifyInstance {
   const app = Fastify({
     logger: options.logger ?? false,
@@ -22,6 +28,7 @@ export function buildApp(
   });
 
   app.register(createRepositoryRoutes(options.repositoryService));
+  app.register(createAiRoutes(options.aiService));
 
   return app;
 }

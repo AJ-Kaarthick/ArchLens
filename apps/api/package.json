@@ -16,6 +16,7 @@
   "dependencies": {
     "@archlens/shared": "workspace:*",
     "@fastify/cors": "^9.0.1",
+    "@google/genai": "^2.21.0",
     "drizzle-orm": "^0.30.10",
     "fastify": "^4.26.0",
     "postgres": "^3.4.4"

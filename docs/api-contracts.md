@@ -12,6 +12,11 @@ The shared package exports canonical Zod schemas and inferred TypeScript types:
 - `RepositoryMetadataSchema`: Canonical repository metadata (stars, forks, description, default branch, timestamps).
 - `AnalysisResultSchema`: Complete analysis result including metadata, tech stack detections, architectural overview, structural metrics, and file tree items.
 - `LandmarkContentSchema`: Bounded file preview data (`path`, `name`, `size`, `content`, `encoding`, `isTruncated`).
+- `EvidenceTypeSchema`: Supported grounding evidence categories (`file`, `manifest`, `entrypoint`, `dependency`, `metric`, `pattern`).
+- `EvidenceCitationSchema`: Individual evidence item (`type`, `label`, `reference`, `description`).
+- `ExplainTopicSchema`: Valid AI explanation topics (`overview`, `architecture`, `tech-stack`, `entrypoints`).
+- `ExplainRequestSchema`: Request payload for AI explanations (`topic`, optional `target`).
+- `ExplainResponseSchema`: Complete grounded AI explanation payload with key takeaways, markdown explanation, citations, cache metadata, and provider info.
 - `ApiErrorSchema`: Standardized error envelope (`error`, `message`, `isRateLimit`, `suggestedAction`).
 
 ---
@@ -179,9 +184,69 @@ Fetches bounded content for a specific landmark file (e.g. `README.md`, `package
 - **Security:** Directory traversal attempts (paths containing `..`) are rejected with `400 Bad Request`.
 - **Truncation:** Files exceeding 256 KB have `isTruncated: true` with a placeholder message.
 
+### 5. `POST /api/repositories/:owner/:repo/explain`
+
+Generates or retrieves a cached grounded AI explanation for a previously analyzed repository.
+
+- **Parameters:**
+  - `:owner`: Repository owner login
+  - `:repo`: Repository name
+- **Request Body (optional):**
+
+  ```json
+  {
+    "topic": "overview",
+    "target": "apps/api"
+  }
+  ```
+
+  _(`topic` defaults to `"overview"`. Valid topics: `"overview"`, `"architecture"`, `"tech-stack"`, `"entrypoints"`. `target` is optional)._
+
+- **Success Response (`200 OK`):**
+  Returns `ExplainResponse`:
+
+  ```json
+  {
+    "topic": "overview",
+    "target": null,
+    "summary": "High-level summary of the repository architecture.",
+    "explanation": "### Architectural Overview\n\nDetailed markdown walkthrough...",
+    "keyTakeaways": [
+      "Modular monorepo architecture",
+      "Strict type boundaries across layers",
+      "PostgreSQL persistence with Drizzle ORM"
+    ],
+    "evidence": [
+      {
+        "type": "manifest",
+        "label": "Root Manifest",
+        "reference": "package.json",
+        "description": "Declares workspace packages and dependencies"
+      },
+      {
+        "type": "entrypoint",
+        "label": "Backend Entrypoint",
+        "reference": "apps/api/src/server.ts",
+        "description": "Primary Fastify server bootstrap"
+      }
+    ],
+    "generatedAt": "2026-09-11T00:30:00.000Z",
+    "provider": "gemini",
+    "model": "gemini-2.0-flash",
+
+    "cached": true
+  }
+  ```
+
+- **Error Responses:**
+  - `400 Bad Request`: When `topic` is invalid or request body fails schema validation.
+  - `404 Not Found`: When the repository has not been analyzed yet via `POST /api/analyze`.
+  - `429 Too Many Requests`: When the configured AI provider rate limit or quota is exceeded (returns structured `ApiError` with `isRateLimit: true` and recovery action).
+  - `500 Internal Server Error`: Returns a sanitized user-facing error message (`"An internal error occurred while generating the AI explanation."`) to prevent exposing internal exception details or stack traces.
+
 ---
 
-### 5. `GET /health`
+### 6. `GET /health`
 
 Liveness and version check.
 
