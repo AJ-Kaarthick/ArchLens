@@ -1,15 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { initDb, db, sql } from './index.js';
+import { describe, it, expect, beforeAll } from 'vitest';
+import { initDb, checkDbConnection, getDbConfig, db, sql } from './index.js';
 import { repositories, analyses, codeChunks } from './schema.js';
 import { eq } from 'drizzle-orm';
 
 describe('Database connection & schema', () => {
   beforeAll(async () => {
     await initDb();
-  });
-
-  afterAll(async () => {
-    await sql.end();
   });
 
   it('initializes tables and unique constraint on (owner, name)', async () => {
@@ -140,5 +136,28 @@ describe('Database connection & schema', () => {
       .from(codeChunks)
       .where(eq(codeChunks.analysisId, analysis.id));
     expect(orphanChunks).toHaveLength(0);
+  });
+
+  it('verifies database connection using checkDbConnection', async () => {
+    const isConnected = await checkDbConnection();
+    expect(isConnected).toBe(true);
+  });
+
+  it('parses database pool configuration with defaults and overrides', () => {
+    const config = getDbConfig();
+    expect(config.connectionString).toBeDefined();
+    expect(config.max).toBeGreaterThan(0);
+    expect(config.idle_timeout).toBeGreaterThan(0);
+    expect(config.connect_timeout).toBeGreaterThan(0);
+  });
+
+  it('verifies the analyses_analyzed_at_desc_idx index exists on analyses table', async () => {
+    const indexes = await sql`
+      SELECT indexname, indexdef
+      FROM pg_indexes
+      WHERE tablename = 'analyses' AND indexname = 'analyses_analyzed_at_desc_idx'
+    `;
+    expect(indexes).toHaveLength(1);
+    expect(indexes[0].indexdef).toContain('analyzed_at DESC');
   });
 });

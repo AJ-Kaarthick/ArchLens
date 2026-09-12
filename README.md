@@ -199,13 +199,21 @@ The backend accepts the following optional environment variables:
 > [!NOTE]
 > `GITHUB_TOKEN` and `GEMINI_API_KEY` are strictly consumed server-side inside `apps/api`. They are never bundled, passed, or exposed to `apps/web` or `packages/shared`. When `GEMINI_API_KEY` is omitted, ArchLens runs 100% offline with `MockAIProvider` and `MockEmbeddingProvider`.
 
-### 4. Build Workspace Packages
+### 4. Run Database Migrations
+
+Apply versioned Drizzle migrations to initialize or update PostgreSQL:
+
+```bash
+pnpm --filter @archlens/api db:migrate
+```
+
+### 5. Build Workspace Packages
 
 ```bash
 pnpm -r run build
 ```
 
-### 5. Run in Development Mode
+### 6. Run in Development Mode
 
 Run all services concurrently:
 

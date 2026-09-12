@@ -82,6 +82,10 @@ The backend accepts configuration via environment variables:
 | Variable                 | Description                                                                                                 | Default                                                |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `DATABASE_URL`           | PostgreSQL connection string                                                                                | `postgres://postgres:postgres@localhost:5432/archlens` |
+| `DB_POOL_MAX`            | Maximum PostgreSQL connection pool size                                                                     | `10`                                                   |
+| `DB_IDLE_TIMEOUT`        | Idle connection timeout in seconds                                                                          | `20`                                                   |
+| `DB_CONNECT_TIMEOUT`     | Database connection timeout in seconds                                                                      | `10`                                                   |
+| `DB_SSL`                 | Optional SSL mode (`require` or `prefer`) for cloud databases                                               | _None_                                                 |
 | `GITHUB_TOKEN`           | Optional GitHub Personal Access Token (server-side only) to raise REST rate limits from 60 to 5,000 req/hr  | _None_                                                 |
 | `GEMINI_API_KEY`         | Optional Google Gemini API key (server-side only). When omitted, ArchLens uses Mock providers gracefully    | _None_                                                 |
 | `AI_PROVIDER`            | AI explanation provider override (`gemini` or `mock`). Defaults to `gemini` if API key present, else `mock` | `gemini` (if key set) / `mock`                         |
@@ -98,7 +102,20 @@ If using the default local Docker container above, `DATABASE_URL` does not need 
 
 ---
 
-## 4. Build Workspace Packages
+## 4. Run Database Migrations
+
+Apply versioned Drizzle migrations to initialize or update the PostgreSQL database schema:
+
+```bash
+pnpm --filter @archlens/api db:migrate
+```
+
+> [!NOTE]
+> Application startup does not execute schema DDL. Schema creation and indexing are managed exclusively through formal Drizzle migrations. Running `db:migrate` is safe for both fresh databases and existing populated databases.
+
+---
+
+## 5. Build Workspace Packages
 
 Build `@archlens/shared`, `@archlens/api`, and `@archlens/web`:
 
@@ -108,7 +125,7 @@ pnpm -r run build
 
 ---
 
-## 5. Start Development Servers
+## 6. Start Development Servers
 
 Start all workspaces concurrently:
 
@@ -130,7 +147,7 @@ Open `http://localhost:5173` to access the ArchLens Web Explorer.
 
 ---
 
-## 6. Code Quality & Testing
+## 7. Code Quality & Testing
 
 ```bash
 # Run Vitest test suite (offline fixtures + integration tests)

@@ -36,34 +36,53 @@ export const repositories = pgTable(
   })
 );
 
-export const analyses = pgTable('analyses', {
-  id: serial('id').primaryKey(),
-  repositoryId: integer('repository_id')
-    .notNull()
-    .references(() => repositories.id, { onDelete: 'cascade' }),
-  commitSha: text('commit_sha'),
-  techStack: jsonb('tech_stack').$type<TechStackDetection[]>().notNull(),
-  architecture: jsonb('architecture').$type<ArchitectureOverview>().notNull(),
-  metrics: jsonb('metrics').$type<StructuralMetrics>().notNull(),
-  tree: jsonb('tree').$type<FileTreeItem[]>().notNull(),
-  analyzedAt: timestamp('analyzed_at', { withTimezone: true }).notNull(),
-});
+export const analyses = pgTable(
+  'analyses',
+  {
+    id: serial('id').primaryKey(),
+    repositoryId: integer('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    commitSha: text('commit_sha'),
+    techStack: jsonb('tech_stack').$type<TechStackDetection[]>().notNull(),
+    architecture: jsonb('architecture').$type<ArchitectureOverview>().notNull(),
+    metrics: jsonb('metrics').$type<StructuralMetrics>().notNull(),
+    tree: jsonb('tree').$type<FileTreeItem[]>().notNull(),
+    analyzedAt: timestamp('analyzed_at', { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    repoAnalyzedAtIdx: index('analyses_repo_analyzed_at_idx')
+      .on(table.repositoryId, table.analyzedAt)
+      .desc(),
+    analyzedAtDescIdx: index('analyses_analyzed_at_desc_idx').on(table.analyzedAt).desc(),
+  })
+);
 
-export const aiExplanations = pgTable('ai_explanations', {
-  id: serial('id').primaryKey(),
-  analysisId: integer('analysis_id')
-    .notNull()
-    .references(() => analyses.id, { onDelete: 'cascade' }),
-  topic: text('topic').notNull(),
-  target: text('target'),
-  summary: text('summary').notNull(),
-  explanation: text('explanation').notNull(),
-  keyTakeaways: jsonb('key_takeaways').$type<string[]>().notNull(),
-  evidence: jsonb('evidence').$type<EvidenceCitation[]>().notNull(),
-  provider: text('provider').notNull(),
-  model: text('model').notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
-});
+export const aiExplanations = pgTable(
+  'ai_explanations',
+  {
+    id: serial('id').primaryKey(),
+    analysisId: integer('analysis_id')
+      .notNull()
+      .references(() => analyses.id, { onDelete: 'cascade' }),
+    topic: text('topic').notNull(),
+    target: text('target'),
+    summary: text('summary').notNull(),
+    explanation: text('explanation').notNull(),
+    keyTakeaways: jsonb('key_takeaways').$type<string[]>().notNull(),
+    evidence: jsonb('evidence').$type<EvidenceCitation[]>().notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    uniqueExplanationIdx: uniqueIndex('ai_explanations_unique').on(
+      table.analysisId,
+      table.topic,
+      table.target
+    ),
+  })
+);
 
 export const codeChunks = pgTable(
   'code_chunks',

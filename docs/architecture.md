@@ -36,8 +36,9 @@ The backend is structured into decoupled, single-responsibility modules:
 ```
 apps/api/src/
 ├── db/
-│   ├── schema.ts          # Drizzle tables (repositories, analyses, ai_explanations, code_chunks)
-│   └── index.ts           # Postgres connection, pgvector detection & idempotent initDb()
+│   ├── schema.ts          # Drizzle tables (repositories, analyses, ai_explanations, code_chunks, repository_executions)
+│   ├── migrate.ts         # Dedicated Drizzle migration runner (pnpm db:migrate)
+│   └── index.ts           # Connection pool configuration, checkDbConnection(), and pgvector detection
 ├── services/
 │   ├── github.service.ts  # Bounded GitHub REST client & rate limit handling
 │   ├── repository.service.ts # Ingestion orchestration & Postgres upserts
@@ -92,3 +93,4 @@ apps/api/src/
 6. **Product Refinement & Factual Integrity (Phase 5 Complete):** The web presentation layer enforces strict visual distinction between deterministic repository facts (Phase 2 manifests, metrics, file trees) and context-augmented AI reasoning (Phase 3 explanations, Phase 4 code slices). Hardened analyzer heuristics exclude test fixtures and mock directories from being detected as primary entrypoints or production landmarks. Transparent indicators inform users of operational retrieval modes ('Relational Cosine Fallback' vs 'pgvector HNSW Index'). All interactive components adhere to WAI-ARIA standards and responsive viewports (320px to 1440px).
 7. **Client-Agnostic Sandboxed Execution (Phase 6 Complete):** Untrusted repository code evaluates exclusively inside ephemeral sandbox environments isolated from the host server. The child execution environment is stripped of all host environment variables and secrets (zero access to `GITHUB_TOKEN`, `GEMINI_API_KEY`, `DATABASE_URL`). Workspaces are provisioned under `/tmp/archlens-sandboxes/<uuid>` with bounded limits (max 25 files, 500 KB per file, 2 MB total) and purged upon completion. Process group leaders terminate all spawned descendants on timeout (`process.kill(-pid, 'SIGKILL')`). Static HTML/CSS/JS previews are served with strict Content Security Policy (`default-src 'self'`) in sandboxed iframes with path traversal defense. The subsystem is 100% client-agnostic, consumable by Web, CLI, and future extensions.
 8. **Deferred Clients (Phase 8+):** Browser extensions and VS Code extensions will act as consumers of the existing `apps/api` and `@archlens/shared` layers without backend architectural modifications.
+9. **Decoupled Database Migrations (Phase 7):** Application startup does not perform schema-creation DDL or run migrations. Schema versioning is managed through formal, versioned Drizzle migrations (`apps/api/drizzle/`) executed via `pnpm --filter @archlens/api db:migrate` prior to release deployment. Startup performs fail-fast connectivity verification (`checkDbConnection()`) only.

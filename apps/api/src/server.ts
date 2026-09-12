@@ -2,7 +2,7 @@ import './config/env.js';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import { ARCHLENS_VERSION } from '@archlens/shared';
-import { initDb } from './db/index.js';
+import { checkDbConnection } from './db/index.js';
 import { createRepositoryRoutes } from './routes/repository.routes.js';
 import { RepositoryService } from './services/repository.service.js';
 import { createAiRoutes } from './routes/ai.routes.js';
@@ -46,8 +46,8 @@ export function buildApp(
 
 const start = async () => {
   try {
-    await initDb();
-    console.log('Database initialized successfully');
+    await checkDbConnection();
+    console.log('Database connection verified');
 
     const app = buildApp({ logger: true });
     const port = Number(process.env.PORT) || 3000;

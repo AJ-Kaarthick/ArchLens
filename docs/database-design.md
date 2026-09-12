@@ -1,10 +1,10 @@
 # Database Design
 
-ArchLens uses **PostgreSQL** as its persistence layer, managed through **Drizzle ORM** with the `postgres.js` driver.
+ArchLens uses **PostgreSQL** as its persistence layer, managed through **Drizzle ORM** with the `postgres.js` driver and versioned migrations.
 
 ---
 
-## Schema Overview (Phase 4)
+## Schema Overview (Phase 7)
 
 ```
 ┌────────────────────────────────────────┐
@@ -23,22 +23,22 @@ ArchLens uses **PostgreSQL** as its persistence layer, managed through **Drizzle
 │ updated_at: timestamptz NOT NULL       │
 └──────────────────┬─────────────────────┘
                    │ 1
-                   │
-                   │ N
-┌──────────────────▼─────────────────────┐
-│                analyses                │
-├────────────────────────────────────────┤
-│ id: serial PK                          │
-│ repository_id: integer FK (cascade)   │
-│ commit_sha: text                       │
-│ tech_stack: jsonb NOT NULL             │
-│ architecture: jsonb NOT NULL           │
-│ metrics: jsonb NOT NULL                │
-│ tree: jsonb NOT NULL                   │
-│ analyzed_at: timestamptz NOT NULL      │
-└─────────┬──────────────────────┬───────┘
-          │ 1                    │ 1
-          │                      │
+                   ├─────────────────────────────────────────┐
+                   │ N                                       │ N
+┌──────────────────▼─────────────────────┐ ┌─────────────────▼─────────────────────┐
+│                analyses                │ │        repository_executions        │
+├────────────────────────────────────────┤ ├─────────────────────────────────────┤
+│ id: serial PK                          │ │ id: serial PK                       │
+│ repository_id: integer FK (cascade)   │ │ repository_id: integer FK (cascade)   │
+│ commit_sha: text                       │ │ analysis_id: integer FK (set null)  │
+│ tech_stack: jsonb NOT NULL             │ │ execution_id: text UNIQUE NOT NULL  │
+│ architecture: jsonb NOT NULL           │ │ profile: text NOT NULL              │
+│ metrics: jsonb NOT NULL                │ │ status: text NOT NULL               │
+│ tree: jsonb NOT NULL                   │ │ exit_code: integer                  │
+│ analyzed_at: timestamptz NOT NULL      │ │ duration_ms: integer NOT NULL (0)   │
+└─────────┬──────────────────────┬───────┘ │ refusal_reason: text                │
+          │ 1                    │ 1       │ created_at: timestamptz NOT NULL    │
+          │                      │         └─────────────────────────────────────┘
           │ N                    │ N
 ┌─────────▼──────────────┐ ┌─────▼───────────────────────────────┐
 │    ai_explanations     │ │                code_chunks          │
@@ -76,7 +76,9 @@ Stores canonical repository metadata ingested from GitHub.
 Stores historical analysis snapshots linked to a repository.
 
 - **Foreign Key:** `repository_id` references `repositories(id)` with `ON DELETE CASCADE`.
-- **Index:** `CREATE INDEX IF NOT EXISTS analyses_repo_analyzed_at_idx ON analyses (repository_id, analyzed_at DESC);` to ensure instant retrieval of the latest analysis.
+- **Indices:**
+  - `CREATE INDEX IF NOT EXISTS analyses_repo_analyzed_at_idx ON analyses (repository_id, analyzed_at DESC);` to ensure instant retrieval of the latest analysis for a given repository.
+  - `CREATE INDEX IF NOT EXISTS analyses_analyzed_at_desc_idx ON analyses (analyzed_at DESC);` (Added in Milestone 7.2) to accelerate global recent-repository queries (`GET /api/repositories/recent`).
 - **JSONB Payloads:** Structured analysis results (`tech_stack`, `architecture`, `metrics`, `tree`) are persisted as validated JSONB documents adhering to `@archlens/shared` Zod contracts.
 
 ### 3. `ai_explanations`
@@ -103,19 +105,62 @@ Stores chunked source code and documentation slices for semantic retrieval.
   - `embedding jsonb`: Stores serialized `number[]` embeddings for relational fallback and environments running standard PostgreSQL without vector extensions.
   - _Operational Note:_ The relational JSONB fallback is an intentional local development and graceful-degradation path ensuring zero crashes in standard PostgreSQL environments. It is not computationally or architecturally equivalent to production `pgvector` indexing. Production setups should use a `pgvector`-enabled container (`pgvector/pgvector:pg16`).
 
+### 5. `repository_executions`
+
+Stores sandboxed process and live preview execution logs.
+
+- **Foreign Keys:**
+  - `repository_id` references `repositories(id)` with `ON DELETE CASCADE`.
+  - `analysis_id` references `analyses(id)` with `ON DELETE SET NULL`.
+- **Indices:**
+  - `CREATE UNIQUE INDEX IF NOT EXISTS repository_executions_execution_id_unique ON repository_executions (execution_id);`
+  - `CREATE INDEX IF NOT EXISTS repository_executions_repo_idx ON repository_executions (repository_id);`
+- **Audit Columns:** Records `profile` (`node-script` or `static-web`), `status` (`completed`, `timed_out`, `failed`, `refused`), `exit_code`, `duration_ms`, `refusal_reason`, and timestamps.
+
 ---
 
-## Initialization & Migrations
+## Production Database Configuration & Connection Pooling
 
-- **Idempotent Bootstrapping (`initDb`):**
-  On server startup, `initDb()` executes idempotent `CREATE TABLE IF NOT EXISTS` and `CREATE UNIQUE INDEX IF NOT EXISTS` DDL statements.
-- **Dynamic pgvector Detection (`hasPgVectorSupport`):**
-  Before attempting vector DDL, `initDb()` inspects `pg_available_extensions` for the `vector` extension. If available, it executes `CREATE EXTENSION IF NOT EXISTS vector` and adds the `embedding_vec vector(768)` column and HNSW index. If absent, it gracefully skips vector DDL without errors.
-- **Drizzle Kit Tooling:**
-  Commands `pnpm --filter @archlens/api db:generate` and `pnpm --filter @archlens/api db:push` are available for schema generation and inspection.
+The PostgreSQL connection is configured through `postgres.js` with production-grade pooling and timeout settings managed via environment variables:
+
+| Variable             | Default | Description                                                     |
+| -------------------- | ------- | --------------------------------------------------------------- |
+| `DATABASE_URL`       | Local   | Canonical PostgreSQL connection URI                             |
+| `DB_POOL_MAX`        | `10`    | Maximum active connections in the connection pool               |
+| `DB_IDLE_TIMEOUT`    | `20`    | Idle connection close timeout in seconds                        |
+| `DB_CONNECT_TIMEOUT` | `10`    | Socket connection establishment timeout in seconds              |
+| `DB_SSL`             | _None_  | Optional SSL mode (`require` or `prefer` for cloud databases)   |
 
 ---
 
-## Future Considerations (Phase 5+)
+## Versioned Migrations & Migration Runner
 
-In Phase 5 and Phase 6, as codebase scale expands, chunking may be enhanced with AST-aware boundary detection, and background worker queues (Redis/BullMQ) will handle asynchronous batch embedding generation for repositories with hundreds of source files.
+In Phase 7, schema-creation DDL has been completely removed from application startup. Schema definitions are now version-controlled through formal Drizzle migrations under `apps/api/drizzle/`.
+
+### Migration Runner (`pnpm db:migrate`)
+
+Run migrations against the target database:
+
+```bash
+pnpm --filter @archlens/api db:migrate
+```
+
+The migration runner (`apps/api/src/db/migrate.ts`):
+- Connects using a dedicated single-connection client (`max: 1`) to eliminate concurrency races.
+- Locates migration files in `apps/api/drizzle/` via `meta/_journal.json`.
+- Uses Drizzle's PostgreSQL migrator tracking applied migration hashes in `drizzle.__drizzle_migrations`.
+- Runs idempotently and transactionally.
+
+### Migration Safety & Upgrade Strategies
+
+1. **Fresh Database Setup:**
+   On a new, empty database, running `pnpm db:migrate` creates all tables, foreign keys, and indexes from scratch.
+
+2. **Existing Populated Database Upgrade:**
+   ArchLens development and production databases created during Phase 1–6 already contain data and tables. The baseline migration (`0000_initial_schema.sql`) uses `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and exception-handled foreign key checks. When run against an existing populated database, it:
+   - Preserves all existing tables and rows completely untouched.
+   - Creates any missing indexes (such as `analyses_analyzed_at_desc_idx`).
+   - Safely records the baseline in `drizzle.__drizzle_migrations`.
+
+3. **Application Startup Decoupling:**
+   On API boot, `apps/api/src/server.ts` calls `checkDbConnection()` to verify database connectivity with a lightweight `SELECT 1`. The server **no longer** issues `CREATE TABLE IF NOT EXISTS` DDL, avoiding migration races in clustered or multi-container deployments. Production deployments must run `pnpm db:migrate` prior to release deployment.
