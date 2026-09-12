@@ -129,7 +129,26 @@ export function createRepositoryRoutes(customService?: RepositoryService): Fasti
       }
     });
 
-    // 3. GET /api/repositories/:owner/:repo/latest
+    // 3. GET /api/repositories/recent
+    fastify.get('/api/repositories/recent', async (request, reply) => {
+      const query = request.query as { limit?: string };
+      const limit = query.limit ? parseInt(query.limit, 10) : 10;
+
+      try {
+        const recents = await service.getRecentRepositories(Number.isNaN(limit) ? 10 : limit);
+        return reply.status(200).send(recents);
+      } catch (err) {
+        fastify.log.error(err);
+        return reply.status(500).send({
+          error: 'ServerError',
+          message: 'Failed to retrieve recent repositories.',
+          isRateLimit: false,
+          suggestedAction: null,
+        });
+      }
+    });
+
+    // 4. GET /api/repositories/:owner/:repo/latest
     fastify.get('/api/repositories/:owner/:repo/latest', async (request, reply) => {
       const { owner, repo } = request.params as { owner: string; repo: string };
 

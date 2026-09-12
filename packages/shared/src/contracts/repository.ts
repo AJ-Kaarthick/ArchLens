@@ -204,3 +204,13 @@ export const ApiErrorSchema = z.object({
 });
 
 export type ApiError = z.infer<typeof ApiErrorSchema>;
+
+export const RecentRepositorySchema = z.object({
+  owner: z.string(),
+  name: z.string(),
+  language: z.string().nullable(),
+  analyzedAt: z.string(),
+  stars: z.number(),
+});
+
+export type RecentRepository = z.infer<typeof RecentRepositorySchema>;

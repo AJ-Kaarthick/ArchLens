@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ARCHLENS_VERSION,
   type AnalysisResult,
@@ -16,6 +16,15 @@ import { LandmarkViewer } from './components/LandmarkViewer.tsx';
 import { AIInsightsView } from './components/AIInsightsView.tsx';
 import { SemanticSearchView } from './components/SemanticSearchView.tsx';
 import { ExecutionView } from './components/ExecutionView.tsx';
+import { RecentlyAnalyzed } from './components/RecentlyAnalyzed.tsx';
+import {
+  parseRoute,
+  buildRepoUrl,
+  navigateTo,
+  subscribeToNavigation,
+  type TabId,
+  type ParsedRoute,
+} from './utils/router.ts';
 import {
   Layers,
   Cpu,
@@ -36,8 +45,6 @@ import {
 import { Button } from './components/ui/Button.tsx';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './components/ui/Card.tsx';
 
-type TabId = 'overview' | 'ai' | 'search' | 'tech' | 'metrics' | 'tree' | 'execution';
-
 interface PresetRepo {
   name: string;
   tag: string;
@@ -52,14 +59,123 @@ const PRESET_REPOSITORIES: PresetRepo[] = [
 ];
 
 export function App() {
+  const [currentRoute, setCurrentRoute] = useState<ParsedRoute>(() =>
+    typeof window !== 'undefined'
+      ? parseRoute(window.location.pathname, window.location.search)
+      : { type: 'home' }
+  );
   const [repoInput, setRepoInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const [unanalyzedRepo, setUnanalyzedRepo] = useState<{ owner: string; repo: string } | null>(null);
 
   const [landmarkContent, setLandmarkContent] = useState<LandmarkContent | null>(null);
   const [loadingLandmark, setLoadingLandmark] = useState(false);
+
+  // Track currently loaded repository key (lowercase "owner/repo")
+  const loadedRepoKeyRef = useRef<string | null>(null);
+
+  // Subscribe to browser navigation events (popstate and programmatic navigateTo)
+  useEffect(() => {
+    return subscribeToNavigation((newRoute) => {
+      setCurrentRoute(newRoute);
+    });
+  }, []);
+
+  // Synchronize route changes with analysis state and deep link cache restoration
+  useEffect(() => {
+    if (currentRoute.type === 'home') {
+      if (loadedRepoKeyRef.current !== null) {
+        setAnalysis(null);
+        loadedRepoKeyRef.current = null;
+      }
+      setUnanalyzedRepo(null);
+      setError(null);
+      return;
+    }
+
+    if (currentRoute.type === 'invalid') {
+      if (loadedRepoKeyRef.current !== null) {
+        setAnalysis(null);
+        loadedRepoKeyRef.current = null;
+      }
+      setUnanalyzedRepo(null);
+      return;
+    }
+
+    if (currentRoute.type === 'repo') {
+      const { owner, repo, tab } = currentRoute;
+      const targetKey = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
+
+      // If this exact repository is already in memory, just synchronize the active tab
+      if (loadedRepoKeyRef.current === targetKey) {
+        setActiveTab(tab);
+        setUnanalyzedRepo(null);
+        setError(null);
+        return;
+      }
+
+      // Otherwise, restore the cached analysis from the database
+      let isCancelled = false;
+      setLoading(true);
+      setError(null);
+      setUnanalyzedRepo(null);
+      setRepoInput(`${owner}/${repo}`);
+
+      fetch(`/api/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/latest`)
+        .then(async (res) => {
+          if (isCancelled) return;
+          if (res.ok) {
+            const data: AnalysisResult = await res.json();
+            setAnalysis(data);
+            loadedRepoKeyRef.current = targetKey;
+            setActiveTab(tab);
+            setUnanalyzedRepo(null);
+            setError(null);
+          } else if (res.status === 404) {
+            setAnalysis(null);
+            loadedRepoKeyRef.current = null;
+            setUnanalyzedRepo({ owner, repo });
+            setError(null);
+          } else {
+            const errData = await res.json().catch(() => null);
+            setAnalysis(null);
+            loadedRepoKeyRef.current = null;
+            setUnanalyzedRepo(null);
+            setError(
+              errData || {
+                error: 'FetchError',
+                message: `Failed to load cached analysis for ${owner}/${repo}.`,
+                isRateLimit: false,
+              }
+            );
+          }
+        })
+        .catch((err) => {
+          if (isCancelled) return;
+          setAnalysis(null);
+          loadedRepoKeyRef.current = null;
+          setUnanalyzedRepo(null);
+          setError({
+            error: 'NetworkError',
+            message: err instanceof Error ? err.message : 'Network error connecting to ArchLens API.',
+            isRateLimit: false,
+            suggestedAction: 'Ensure backend server is running on port 3000.',
+          });
+        })
+        .finally(() => {
+          if (!isCancelled) {
+            setLoading(false);
+          }
+        });
+
+      return () => {
+        isCancelled = true;
+      };
+    }
+  }, [currentRoute]);
 
   const handleAnalyze = async (inputToAnalyze?: string) => {
     const target = (inputToAnalyze || repoInput).trim();
@@ -71,6 +187,7 @@ export function App() {
 
     setLoading(true);
     setError(null);
+    setUnanalyzedRepo(null);
 
     try {
       const res = await fetch('/api/analyze', {
@@ -84,8 +201,16 @@ export function App() {
       if (!res.ok) {
         setError(data as ApiError);
       } else {
-        setAnalysis(data as AnalysisResult);
+        const analysisData = data as AnalysisResult;
+        const repoKey = `${analysisData.repository.owner.toLowerCase()}/${analysisData.repository.name.toLowerCase()}`;
+        loadedRepoKeyRef.current = repoKey;
+        setAnalysis(analysisData);
         setActiveTab('overview');
+        setUnanalyzedRepo(null);
+        setError(null);
+
+        // Synchronize browser URL with analyzed repo route
+        navigateTo(buildRepoUrl(analysisData.repository.owner, analysisData.repository.name, 'overview'));
       }
     } catch (err) {
       setError({
@@ -96,6 +221,22 @@ export function App() {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleTabChange = (tab: TabId) => {
+    setActiveTab(tab);
+    if (analysis) {
+      navigateTo(buildRepoUrl(analysis.repository.owner, analysis.repository.name, tab));
+    }
+  };
+
+  const handleSelectRecentRepo = (fullName: string) => {
+    const parts = fullName.split('/');
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      navigateTo(buildRepoUrl(parts[0], parts[1], 'overview'));
+    } else {
+      handleAnalyze(fullName);
     }
   };
 
@@ -137,8 +278,11 @@ export function App() {
 
   const handleResetAnalysis = () => {
     setAnalysis(null);
+    loadedRepoKeyRef.current = null;
     setRepoInput('');
     setError(null);
+    setUnanalyzedRepo(null);
+    navigateTo('/');
   };
 
   const hasReadme = analysis?.tree.some((t) => t.name.toLowerCase() === 'readme.md') ?? false;
@@ -271,7 +415,7 @@ export function App() {
                   key={preset.name}
                   type="button"
                   disabled={loading}
-                  onClick={() => handleAnalyze(preset.name)}
+                  onClick={() => handleSelectRecentRepo(preset.name)}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-950 hover:bg-slate-800/80 active:bg-slate-800 text-slate-300 hover:text-white rounded-lg border border-slate-800/80 hover:border-slate-700 transition cursor-pointer text-xs"
                 >
                   <span className="font-mono text-[11px] text-slate-200">{preset.name}</span>
@@ -334,9 +478,69 @@ export function App() {
           </div>
         )}
 
+        {/* Unanalyzed Repository State */}
+        {unanalyzedRepo && !loading && !analysis && (
+          <Card variant="elevated" className="p-8 text-center space-y-4 max-w-xl mx-auto my-8">
+            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center mx-auto">
+              <Github size={24} />
+            </div>
+            <div className="space-y-1.5">
+              <CardTitle className="text-lg justify-center">Repository Not Yet Analyzed</CardTitle>
+              <CardDescription className="text-sm max-w-md mx-auto">
+                ArchLens does not have a cached architectural analysis for{' '}
+                <code className="text-slate-200 font-mono bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                  {unanalyzedRepo.owner}/{unanalyzedRepo.repo}
+                </code>
+                . Run an analysis now to inspect its architecture, dependencies, metrics, and sandboxed preview.
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              <Button
+                variant="primary"
+                size="md"
+                loading={loading}
+                onClick={() => handleAnalyze(`${unanalyzedRepo.owner}/${unanalyzedRepo.repo}`)}
+                icon={<Sparkles size={14} />}
+              >
+                Analyze Repository Now
+              </Button>
+              <Button variant="outline" size="md" onClick={handleResetAnalysis}>
+                Back to Home
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        {/* Invalid Route State */}
+        {currentRoute.type === 'invalid' && !loading && (
+          <Card variant="elevated" className="p-8 text-center space-y-4 max-w-xl mx-auto my-8">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center mx-auto">
+              <AlertCircle size={24} />
+            </div>
+            <div className="space-y-1.5">
+              <CardTitle className="text-lg justify-center">Invalid Route</CardTitle>
+              <CardDescription className="text-sm max-w-md mx-auto">
+                The requested path{' '}
+                <code className="text-slate-200 font-mono bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                  {currentRoute.path}
+                </code>{' '}
+                is not a recognized ArchLens route.
+              </CardDescription>
+            </div>
+            <div className="pt-2">
+              <Button variant="outline" size="md" onClick={handleResetAnalysis}>
+                Return to Home
+              </Button>
+            </div>
+          </Card>
+        )}
+
         {/* Onboarding / Empty State (when no repo analyzed yet) */}
-        {!analysis && !loading && (
+        {!analysis && !loading && !unanalyzedRepo && currentRoute.type === 'home' && (
           <div className="space-y-8 py-4">
+            {/* Recently Analyzed Repositories */}
+            <RecentlyAnalyzed onSelectRepo={handleSelectRecentRepo} disabled={loading} />
+
             {/* 3 Pillars of ArchLens */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               {/* Pillar 1 */}
@@ -406,7 +610,7 @@ export function App() {
 
               <button
                 type="button"
-                onClick={() => handleAnalyze('fastify/fastify')}
+                onClick={() => handleSelectRecentRepo('fastify/fastify')}
                 className="px-4 py-2 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 border border-blue-500/30 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 shrink-0"
               >
                 <span>Try fastify/fastify</span>
@@ -438,7 +642,7 @@ export function App() {
                 id="tab-overview"
                 aria-selected={activeTab === 'overview'}
                 aria-controls="panel-overview"
-                onClick={() => setActiveTab('overview')}
+                onClick={() => handleTabChange('overview')}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   activeTab === 'overview'
                     ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
@@ -454,7 +658,7 @@ export function App() {
                 id="tab-ai"
                 aria-selected={activeTab === 'ai'}
                 aria-controls="panel-ai"
-                onClick={() => setActiveTab('ai')}
+                onClick={() => handleTabChange('ai')}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   activeTab === 'ai'
                     ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
@@ -470,7 +674,7 @@ export function App() {
                 id="tab-search"
                 aria-selected={activeTab === 'search'}
                 aria-controls="panel-search"
-                onClick={() => setActiveTab('search')}
+                onClick={() => handleTabChange('search')}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   activeTab === 'search'
                     ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
@@ -486,7 +690,7 @@ export function App() {
                 id="tab-tech"
                 aria-selected={activeTab === 'tech'}
                 aria-controls="panel-tech"
-                onClick={() => setActiveTab('tech')}
+                onClick={() => handleTabChange('tech')}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   activeTab === 'tech'
                     ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
@@ -505,7 +709,7 @@ export function App() {
                 id="tab-metrics"
                 aria-selected={activeTab === 'metrics'}
                 aria-controls="panel-metrics"
-                onClick={() => setActiveTab('metrics')}
+                onClick={() => handleTabChange('metrics')}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   activeTab === 'metrics'
                     ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
@@ -521,7 +725,7 @@ export function App() {
                 id="tab-tree"
                 aria-selected={activeTab === 'tree'}
                 aria-controls="panel-tree"
-                onClick={() => setActiveTab('tree')}
+                onClick={() => handleTabChange('tree')}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   activeTab === 'tree'
                     ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
@@ -540,7 +744,7 @@ export function App() {
                 id="tab-execution"
                 aria-selected={activeTab === 'execution'}
                 aria-controls="panel-execution"
-                onClick={() => setActiveTab('execution')}
+                onClick={() => handleTabChange('execution')}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                   activeTab === 'execution'
                     ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'

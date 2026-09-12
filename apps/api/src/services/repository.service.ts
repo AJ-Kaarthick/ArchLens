@@ -1,5 +1,10 @@
 import { eq, and, desc, sql as drizzleSql } from 'drizzle-orm';
-import type { AnalysisResult, LandmarkContent, RepositoryMetadata } from '@archlens/shared';
+import type {
+  AnalysisResult,
+  LandmarkContent,
+  RepositoryMetadata,
+  RecentRepository,
+} from '@archlens/shared';
 import { db } from '../db/index.js';
 import { repositories, analyses } from '../db/schema.js';
 import { githubService, GitHubService } from './github.service.js';
@@ -189,6 +194,43 @@ export class RepositoryService {
     }
 
     return this.gh.getFileContent(cleanOwner, cleanRepo, cleanPath, ref);
+  }
+
+  async getRecentRepositories(limit = 10): Promise<RecentRepository[]> {
+    const clampedLimit = Math.max(1, Math.min(limit, 50));
+
+    const rows = await db
+      .select({
+        owner: repositories.owner,
+        name: repositories.name,
+        language: repositories.primaryLanguage,
+        analyzedAt: analyses.analyzedAt,
+        stars: repositories.stars,
+      })
+      .from(analyses)
+      .innerJoin(repositories, eq(analyses.repositoryId, repositories.id))
+      .orderBy(desc(analyses.analyzedAt))
+      .limit(clampedLimit * 5);
+
+    const seen = new Set<string>();
+    const recents: RecentRepository[] = [];
+
+    for (const r of rows) {
+      const key = `${r.owner}/${r.name}`.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        recents.push({
+          owner: r.owner,
+          name: r.name,
+          language: r.language,
+          analyzedAt: r.analyzedAt.toISOString(),
+          stars: r.stars,
+        });
+        if (recents.length >= clampedLimit) break;
+      }
+    }
+
+    return recents;
   }
 }
 

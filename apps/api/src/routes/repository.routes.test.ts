@@ -170,4 +170,83 @@ describe('Repository Fastify Routes', () => {
     expect(body.name).toBe('README.md');
     expect(body.content).toContain('# ArchLens');
   });
+
+  it('GET /api/repositories/recent returns 200 with recent repositories list', async () => {
+    const mockRecents = [
+      {
+        owner: 'fastify',
+        name: 'fastify',
+        language: 'TypeScript',
+        analyzedAt: '2026-09-12T10:00:00Z',
+        stars: 32000,
+      },
+      {
+        owner: 'facebook',
+        name: 'react',
+        language: 'JavaScript',
+        analyzedAt: '2026-09-12T09:00:00Z',
+        stars: 220000,
+      },
+    ];
+
+    const mockService = {
+      analyze: vi.fn(),
+      getLatestAnalysis: vi.fn(),
+      getLandmarkContent: vi.fn(),
+      getRecentRepositories: vi.fn().mockResolvedValue(mockRecents),
+    } as unknown as RepositoryService;
+
+    const app = buildApp({ logger: false, repositoryService: mockService });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/repositories/recent?limit=5',
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toHaveLength(2);
+    expect(body[0].owner).toBe('fastify');
+    expect(body[0].stars).toBe(32000);
+  });
+
+  it('GET /api/repositories/recent returns 200 with empty array when no repositories analyzed', async () => {
+    const mockService = {
+      analyze: vi.fn(),
+      getLatestAnalysis: vi.fn(),
+      getLandmarkContent: vi.fn(),
+      getRecentRepositories: vi.fn().mockResolvedValue([]),
+    } as unknown as RepositoryService;
+
+    const app = buildApp({ logger: false, repositoryService: mockService });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/repositories/recent',
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).toEqual([]);
+  });
+
+  it('GET /api/repositories/:owner/:repo/latest returns 404 when unanalyzed', async () => {
+    const mockService = {
+      analyze: vi.fn(),
+      getLatestAnalysis: vi.fn().mockResolvedValue(null),
+      getLandmarkContent: vi.fn(),
+      getRecentRepositories: vi.fn(),
+    } as unknown as RepositoryService;
+
+    const app = buildApp({ logger: false, repositoryService: mockService });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/repositories/unknown-owner/unknown-repo/latest',
+    });
+
+    expect(res.statusCode).toBe(404);
+    const body = JSON.parse(res.body);
+    expect(body.error).toBe('NotFound');
+  });
 });
