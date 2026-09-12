@@ -20,6 +20,13 @@ The shared package exports canonical Zod schemas and inferred TypeScript types:
 - `SearchQuerySchema`: Request payload for semantic search (`query`, `limit`, optional `pathPrefix`, optional `category`).
 - `SearchResultItemSchema`: Single ranked chunk search result (`filePath`, `chunkIndex`, `startLine`, `endLine`, `content`, `score`, `language`, `category`).
 - `SearchResponseSchema`: Complete semantic search response (`query`, `results`, `totalMatches`, `durationMs`, `fallback`).
+- `ExecutionProfileSchema`: Supported sandboxed execution profiles (`'node-script'`, `'static-web'`).
+- `ExecutionStatusSchema`: Sandbox execution status (`'success'`, `'failed'`, `'timeout'`, `'refused'`, `'error'`).
+- `RefusalReasonSchema`: Structured execution refusal taxonomy (`'unsupported_runtime'`, `'missing_entrypoint'`, `'unsafe_project'`, `'exceeded_bounds'`, `'timeout'`, `'disabled'`).
+- `ExecutionRequestSchema`: Request payload for sandboxed execution (`entrypoint?`, `profile?`, `args?`, `timeoutMs?`, `inlineCode?`).
+- `ExecutionResultSchema`: Comprehensive execution result (`executionId`, `status`, `exitCode`, `stdout`, `stderr`, `durationMs`, `profile`, `refusalReason?`, `refusalMessage?`, `preview?`, `timestamp`).
+- `ExecutionEligibilitySchema`: Sandbox eligibility determination (`eligible`, `recommendedProfile`, `detectedEntrypoints`, `supportedProfiles`, `refusalReason?`, `reasonMessage?`, `warnings`).
+- `PreviewInfoSchema`: Live static web preview metadata (`type`, `entrypoint`, `previewUrl`).
 - `ApiErrorSchema`: Standardized error envelope (`error`, `message`, `isRateLimit`, `suggestedAction`).
 
 ---
@@ -313,7 +320,100 @@ Executes semantic search over indexed code chunks for an analyzed repository.
 
 ---
 
-### 7. `GET /health`
+### 7. `GET /api/repositories/:owner/:repo/eligibility`
+
+Evaluates whether a repository is eligible for sandboxed execution and returns recommended profiles and candidate entrypoints.
+
+- **Success Response (`200 OK`):**
+  Returns `ExecutionEligibility`:
+  ```json
+  {
+    "eligible": true,
+    "recommendedProfile": "node-script",
+    "detectedEntrypoints": ["index.js", "cli.js"],
+    "supportedProfiles": ["node-script"],
+    "warnings": []
+  }
+  ```
+- **Refusal Response (`200 OK` with `eligible: false`):**
+  ```json
+  {
+    "eligible": false,
+    "recommendedProfile": null,
+    "detectedEntrypoints": [],
+    "supportedProfiles": [],
+    "refusalReason": "unsupported_runtime",
+    "reasonMessage": "Repository is identified as a Python project. ArchLens Phase 6 sandbox currently supports Node.js scripts (node-script) and static web previews (static-web).",
+    "warnings": []
+  }
+  ```
+
+---
+
+### 8. `POST /api/repositories/:owner/:repo/execute`
+
+Executes an eligible entrypoint in an ephemeral, isolated sandbox environment or prepares a live static preview workspace.
+
+- **Request Body:**
+  ```json
+  {
+    "profile": "node-script",
+    "entrypoint": "index.js",
+    "args": ["--help"],
+    "timeoutMs": 5000,
+    "inlineCode": "console.log('Hello');"
+  }
+  ```
+- **Success Response (`200 OK`):**
+  Returns `ExecutionResult`:
+  ```json
+  {
+    "executionId": "exec_1789199711033_f4030879",
+    "status": "success",
+    "exitCode": 0,
+    "stdout": "Hello\n",
+    "stderr": "",
+    "durationMs": 67,
+    "profile": "node-script",
+    "timestamp": "2026-09-12T07:55:11.112Z"
+  }
+  ```
+- **Live Preview Response (`200 OK` for `static-web`):**
+  ```json
+  {
+    "executionId": "exec_1789199711122_fe4a2295",
+    "status": "success",
+    "exitCode": 0,
+    "stdout": "Static web preview prepared successfully with entrypoint: index.html",
+    "stderr": "",
+    "durationMs": 8,
+    "profile": "static-web",
+    "preview": {
+      "type": "static-html",
+      "entrypoint": "index.html",
+      "previewUrl": "/api/preview/exec_1789199711122_fe4a2295/index.html"
+    },
+    "timestamp": "2026-09-12T07:55:11.130Z"
+  }
+  ```
+
+---
+
+### 9. `GET /api/preview/:executionId/*`
+
+Serves static assets for a registered preview workspace with strict Content Security Policy headers, MIME type mapping, and directory traversal defense.
+
+- **Headers Enforced:**
+  - `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'self'`
+  - `X-Content-Type-Options: nosniff`
+  - `X-Frame-Options: SAMEORIGIN`
+  - `Cache-Control: no-cache, no-store, must-revalidate`
+- **Error Responses:**
+  - `404 Not Found`: When the workspace has expired or a directory traversal attempt (`..`) is detected.
+
+---
+
+### 10. `GET /health`
 
 Liveness and version check.
 

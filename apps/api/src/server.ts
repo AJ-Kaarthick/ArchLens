@@ -9,6 +9,9 @@ import { createAiRoutes } from './routes/ai.routes.js';
 import { AIService } from './services/ai/ai.service.js';
 import { createSearchRoutes } from './routes/search.routes.js';
 import { RetrievalService } from './services/retrieval/retrieval.service.js';
+import { createExecutionRoutes } from './routes/execution.routes.js';
+import { ExecutionService } from './services/sandbox/execution.service.js';
+import { WorkspaceManager } from './services/sandbox/workspace-manager.js';
 
 export function buildApp(
   options: {
@@ -16,6 +19,8 @@ export function buildApp(
     repositoryService?: RepositoryService;
     aiService?: AIService;
     retrievalService?: RetrievalService;
+    executionService?: ExecutionService;
+    workspaceManager?: WorkspaceManager;
   } = {}
 ): FastifyInstance {
   const app = Fastify({
@@ -34,6 +39,7 @@ export function buildApp(
   app.register(createRepositoryRoutes(options.repositoryService));
   app.register(createAiRoutes(options.aiService));
   app.register(createSearchRoutes(options.retrievalService));
+  app.register(createExecutionRoutes(options.executionService, options.workspaceManager));
 
   return app;
 }

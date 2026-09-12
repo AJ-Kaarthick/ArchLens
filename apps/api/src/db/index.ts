@@ -105,6 +105,31 @@ export async function initDb(): Promise<void> {
     ON code_chunks (analysis_id, file_path, chunk_index);
   `;
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS repository_executions (
+      id SERIAL PRIMARY KEY,
+      repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+      analysis_id INTEGER REFERENCES analyses(id) ON DELETE SET NULL,
+      execution_id TEXT NOT NULL,
+      profile TEXT NOT NULL,
+      status TEXT NOT NULL,
+      exit_code INTEGER,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      refusal_reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL
+    );
+  `;
+
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS repository_executions_execution_id_unique
+    ON repository_executions (execution_id);
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS repository_executions_repo_idx
+    ON repository_executions (repository_id);
+  `;
+
   const isVectorSupported = await hasPgVectorSupport();
   if (isVectorSupported) {
     try {

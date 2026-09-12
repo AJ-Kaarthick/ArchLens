@@ -15,6 +15,7 @@ import { FileTreeExplorer } from './components/FileTreeExplorer.tsx';
 import { LandmarkViewer } from './components/LandmarkViewer.tsx';
 import { AIInsightsView } from './components/AIInsightsView.tsx';
 import { SemanticSearchView } from './components/SemanticSearchView.tsx';
+import { ExecutionView } from './components/ExecutionView.tsx';
 import {
   Layers,
   Cpu,
@@ -30,11 +31,12 @@ import {
   ShieldCheck,
   ArrowRight,
   RefreshCw,
+  Terminal,
 } from 'lucide-react';
 import { Button } from './components/ui/Button.tsx';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './components/ui/Card.tsx';
 
-type TabId = 'overview' | 'ai' | 'search' | 'tech' | 'metrics' | 'tree';
+type TabId = 'overview' | 'ai' | 'search' | 'tech' | 'metrics' | 'tree' | 'execution';
 
 interface PresetRepo {
   name: string;
@@ -532,6 +534,22 @@ export function App() {
                   {analysis.tree.length}
                 </span>
               </button>
+
+              <button
+                role="tab"
+                id="tab-execution"
+                aria-selected={activeTab === 'execution'}
+                aria-controls="panel-execution"
+                onClick={() => setActiveTab('execution')}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                  activeTab === 'execution'
+                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <Terminal size={14} className="text-emerald-400" />
+                Run & Preview
+              </button>
             </div>
 
             {/* View Panels */}
@@ -578,6 +596,12 @@ export function App() {
               {activeTab === 'tree' && (
                 <div role="tabpanel" id="panel-tree" aria-labelledby="tab-tree" tabIndex={0}>
                   <FileTreeExplorer tree={analysis.tree} onSelectFile={handleSelectTreeItem} />
+                </div>
+              )}
+
+              {activeTab === 'execution' && (
+                <div role="tabpanel" id="panel-execution" aria-labelledby="tab-execution" tabIndex={0}>
+                  <ExecutionView repository={analysis.repository} />
                 </div>
               )}
             </div>

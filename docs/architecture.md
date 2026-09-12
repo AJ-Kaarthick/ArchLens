@@ -61,13 +61,22 @@ apps/api/src/
 │   │   └── providers/
 │   │       ├── gemini.provider.ts# Google Gemini (@google/genai)
 │   │       └── mock.provider.ts  # Deterministic offline heuristic
-│   └── retrieval/
-│       ├── chunker.ts            # Line-aware code & doc chunking engine
-│       └── retrieval.service.ts  # Dual-mode vector & relational search
+│   ├── retrieval/
+│   │   ├── chunker.ts            # Line-aware code & doc chunking engine
+│   │   └── retrieval.service.ts  # Dual-mode vector & relational search
+│   └── sandbox/
+│       ├── types.ts              # ISandboxRunner and execution options interfaces
+│       ├── policy.ts             # Centralized sandbox limits, clampTimeout, SAFE_ENV
+│       ├── output-collector.ts   # Bounded 64 KB stdout/stderr stream collector
+│       ├── workspace-manager.ts  # Ephemeral /tmp workspace lifecycle & preview resolver
+│       ├── eligibility.ts        # Execution eligibility & refusal taxonomy detector
+│       ├── process-runner.ts     # ProcessSandboxRunner with process group SIGKILL
+│       └── execution.service.ts  # Execution orchestration & DB logging
 ├── routes/
 │   ├── repository.routes.ts # Analysis & landmark REST endpoints
 │   ├── ai.routes.ts         # Grounded explanation endpoint (/explain)
-│   └── search.routes.ts     # Semantic repository search endpoint (/search)
+│   ├── search.routes.ts     # Semantic repository search endpoint (/search)
+│   └── execution.routes.ts  # Eligibility, execution, and sandboxed preview routes
 └── server.ts              # App factory, CORS, and startup bootstrap
 ```
 
@@ -81,4 +90,5 @@ apps/api/src/
 4. **Isolated AI Layer (Phase 3 Complete):** The AI reasoning layer is strictly confined to `apps/api` behind the `IAIProvider` interface. AI consumes already-verified Phase 2 facts, validates every citation via `EvidenceValidator`, and caches results in PostgreSQL.
 5. **Semantic Retrieval Augmentation (Phase 4 Complete):** Deterministic Phase 2 facts remain the sole authoritative source of truth. Vector similarity is used strictly for relevance ranking and localized context retrieval—never to invent or alter structural facts. `EvidenceValidator` remains authoritative over all retrieved context and AI claims. Ingested repository code is never executed. Search supports dual-mode persistence (`pgvector` HNSW with an automatic relational in-memory cosine fallback for local development).
 6. **Product Refinement & Factual Integrity (Phase 5 Complete):** The web presentation layer enforces strict visual distinction between deterministic repository facts (Phase 2 manifests, metrics, file trees) and context-augmented AI reasoning (Phase 3 explanations, Phase 4 code slices). Hardened analyzer heuristics exclude test fixtures and mock directories from being detected as primary entrypoints or production landmarks. Transparent indicators inform users of operational retrieval modes ('Relational Cosine Fallback' vs 'pgvector HNSW Index'). All interactive components adhere to WAI-ARIA standards and responsive viewports (320px to 1440px).
-7. **Deferred Clients (Phase 7+):** Browser extensions and desktop clients will act as consumers of the existing `apps/api` and `@archlens/shared` layers without backend architectural modifications.
+7. **Client-Agnostic Sandboxed Execution (Phase 6 Complete):** Untrusted repository code evaluates exclusively inside ephemeral sandbox environments isolated from the host server. The child execution environment is stripped of all host environment variables and secrets (zero access to `GITHUB_TOKEN`, `GEMINI_API_KEY`, `DATABASE_URL`). Workspaces are provisioned under `/tmp/archlens-sandboxes/<uuid>` with bounded limits (max 25 files, 500 KB per file, 2 MB total) and purged upon completion. Process group leaders terminate all spawned descendants on timeout (`process.kill(-pid, 'SIGKILL')`). Static HTML/CSS/JS previews are served with strict Content Security Policy (`default-src 'self'`) in sandboxed iframes with path traversal defense. The subsystem is 100% client-agnostic, consumable by Web, CLI, and future extensions.
+8. **Deferred Clients (Phase 8+):** Browser extensions and VS Code extensions will act as consumers of the existing `apps/api` and `@archlens/shared` layers without backend architectural modifications.

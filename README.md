@@ -8,9 +8,9 @@ ArchLens is an open-source platform that enables developers, contributors, and t
 
 ## Project Status
 
-**Current Status:** Phase 5 Complete (Product Refinement, UI/UX Quality & Polished Developer Experience).
+**Current Status:** Phase 6 Complete (Client-Agnostic Sandboxed Repository Execution & Live Preview Subsystem).
 
-ArchLens features a fully functional, deterministic repository analysis engine, paired with a grounded AI reasoning layer, intelligent code chunking with dual-mode vector search (PostgreSQL `pgvector` with relational cosine fallback), and a refined, responsive React developer explorer built on accessible UI primitives.
+ArchLens features a fully functional, deterministic repository analysis engine, paired with a grounded AI reasoning layer, intelligent code chunking with dual-mode vector search (PostgreSQL `pgvector` with relational cosine fallback), a refined, accessible React developer explorer, and a secure, client-agnostic sandboxed execution and live preview subsystem.
 
 ---
 
@@ -22,11 +22,11 @@ Gaining a quick, accurate mental model of a new or unfamiliar repository is trad
 - **Environment friction:** Requiring specific language toolchains, SDK versions, or container daemons just to evaluate a project.
 - **AI hallucination risks:** Off-the-shelf LLMs routinely guess project dependencies, hallucinate outdated patterns, and misstate repository structures when ungrounded.
 
-ArchLens solves this by establishing a **factual, deterministic baseline** first. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any AI reasoning occurs. AI reasoning is strictly constrained to explaining verified facts with verifiable evidence citations. Semantic retrieval augments reasoning by locating relevant code slices without altering structural facts.
+ArchLens solves this by establishing a **factual, deterministic baseline** first. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any AI reasoning occurs. AI reasoning is strictly constrained to explaining verified facts with verifiable evidence citations. Semantic retrieval augments reasoning by locating relevant code slices without altering structural facts. For eligible repositories, sandboxed execution safely evaluates entrypoints without host compromise.
 
 ---
 
-## What Works Today (Phase 1 through Phase 5)
+## What Works Today (Phase 1 through Phase 6)
 
 - **Bounded GitHub Ingestion:** Fetches repository metadata and recursive file trees via the GitHub REST API v3 without git cloning.
 - **Safety Bounds:** Enforces a strict 10,000-item tree bound, 256 KB landmark file preview bound, max 100 files, and max 500 code chunks per repository.
@@ -43,9 +43,19 @@ ArchLens solves this by establishing a **factual, deterministic baseline** first
 - **Prompt-Injection Defense:** Untrusted repository content (README, description, and retrieved code chunks) is bounded, sanitized, and isolated inside `<untrusted_content>` tags, preventing malicious repository instructions from subverting AI reasoning.
 - **AI Provider Abstraction:** Backend interface (`IAIProvider`) supporting Google Gemini (`gemini-2.0-flash`) and a deterministic `MockAIProvider`.
 - **PostgreSQL Explanation Caching:** Explanations are cached in `ai_explanations` keyed on `(analysis_id, topic, target)` for instant, zero-token replay with transparent cache hit indicators.
-- **Fastify REST API:** Synchronous endpoints for analysis (`POST /api/analyze`), latest snapshot (`GET /api/repositories/:owner/:repo/latest`), landmark previews (`GET /api/repositories/:owner/:repo/landmark-content`), AI explanations (`POST /api/repositories/:owner/:repo/explain`), and semantic search (`POST /api/repositories/:owner/:repo/search`).
+- **Client-Agnostic Sandboxed Execution:** Reusable backend execution engine in `apps/api` and contracts in `packages/shared`, consumable identically by ArchLens Web, future VS Code extensions, and future browser extensions.
+- **Initial Hardened Profiles:** Pluggable execution currently supporting `node-script` (standalone JavaScript/Node scripts) and `static-web` (HTML/CSS/JS frontend preview).
+- **Zero Host Secret Leakage:** Child execution runs in a stripped, sanitized environment (`SAFE_ENV`: `PATH`, `NODE_ENV=production`, `HOME=/tmp`) that completely excludes all host credentials (`GITHUB_TOKEN`, `GEMINI_API_KEY`, `DATABASE_URL`).
+- **Process Group Termination & Hard Timeouts:** Spawns detached process groups; timeouts (max 10s) trigger full process tree termination via `process.kill(-child.pid, 'SIGKILL')`.
+- **Bounded Output Buffering:** Standard output and standard error streams are collected up to a hard 64 KB limit with clear truncation notices (`OutputCollector`).
+- **Ephemeral Workspaces & Filesystem Confinement:** Workspaces are generated under `/tmp/archlens-sandboxes/<uuid>` with restrictive `0o700`/`0o600` permissions and limits (max 25 files, max 500 KB per file, max 2 MB total), purged immediately after node execution.
+- **Isolated Static Web Live Previews:** Serves static web previews with strict Content Security Policy (`default-src 'self'`), MIME type resolution, path traversal defense, and isolated iframe sandboxing.
+- **Structured Refusal Taxonomy:** Deny-by-default execution policy that safely refuses unsupported languages (Python, Go, Rust, Java, etc.) or missing entrypoints with structured refusal reasons (`unsupported_runtime`, `missing_entrypoint`, etc.).
+- **Execution History Logging:** PostgreSQL `repository_executions` logs execution ID, profile, status, exit code, duration, refusal reasons, and timestamps.
+- **Fastify REST API:** Synchronous endpoints for analysis (`POST /api/analyze`), latest snapshot (`GET /api/repositories/:owner/:repo/latest`), landmark previews (`GET /api/repositories/:owner/:repo/landmark-content`), AI explanations (`POST /api/repositories/:owner/:repo/explain`), semantic search (`POST /api/repositories/:owner/:repo/search`), execution eligibility (`GET /api/repositories/:owner/:repo/eligibility`), execution (`POST /api/repositories/:owner/:repo/execute`), and live preview (`GET /api/preview/:executionId/*`).
 - **Reusable UI Component System:** Clean, zero-dependency design primitives (`Button`, `Card`, `Badge`, `Input`, `Select`, `Skeleton`, `EmptyState`) built directly with Tailwind CSS and Lucide React.
 - **Polished Developer Experience & Onboarding:** Persistent application shell, 3-pillar architectural onboarding guide for new visitors, and one-click quick presets (`fastify/fastify`, `facebook/react`, `gin-gonic/gin`, `tokio-rs/tokio`, `tiangolo/fastapi`).
+- **Interactive Web Runner UI:** `Run & Preview` tab with real-time eligibility evaluation, profile selector, entrypoint dropdown, argument input, timeout selector, execution metadata bar, dark monospace console output, and responsive live iframe preview.
 - **Refined Explorer Views:** Collapsible folder file tree with search filtering, accessible modal landmark viewer with background backdrop click and Escape-key dismiss, stacked language composition bar with tooltips, and categorized tech stack cards.
 - **Semantic Search Polish & Transparency:** Query clear button, category filter dropdown, limit selector, snippet copy buttons, similarity score badges, and a collapsible disclosure drawer explaining the local "Relational Cosine Fallback" mode.
 - **Accessible & Responsive Architecture:** Full WAI-ARIA tab semantics (`role="tablist"`, `role="tab"`, `role="tabpanel"`), visible focus rings, `prefers-reduced-motion` compliance, and smooth horizontal tab scrolling verified across mobile, tablet, and desktop viewports.

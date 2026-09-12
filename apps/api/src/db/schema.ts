@@ -92,6 +92,29 @@ export const codeChunks = pgTable(
   })
 );
 
+export const repositoryExecutions = pgTable(
+  'repository_executions',
+  {
+    id: serial('id').primaryKey(),
+    repositoryId: integer('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    analysisId: integer('analysis_id')
+      .references(() => analyses.id, { onDelete: 'set null' }),
+    executionId: text('execution_id').notNull(),
+    profile: text('profile').notNull(),
+    status: text('status').notNull(),
+    exitCode: integer('exit_code'),
+    durationMs: integer('duration_ms').notNull().default(0),
+    refusalReason: text('refusal_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    execIdIdx: uniqueIndex('repository_executions_execution_id_unique').on(table.executionId),
+    repoIdx: index('repository_executions_repo_idx').on(table.repositoryId),
+  })
+);
+
 export type RepositoryRecord = typeof repositories.$inferSelect;
 export type InsertRepositoryRecord = typeof repositories.$inferInsert;
 export type AnalysisRecord = typeof analyses.$inferSelect;
@@ -100,3 +123,5 @@ export type AIExplanationRecord = typeof aiExplanations.$inferSelect;
 export type InsertAIExplanationRecord = typeof aiExplanations.$inferInsert;
 export type CodeChunkRecord = typeof codeChunks.$inferSelect;
 export type InsertCodeChunkRecord = typeof codeChunks.$inferInsert;
+export type RepositoryExecutionRecord = typeof repositoryExecutions.$inferSelect;
+export type InsertRepositoryExecutionRecord = typeof repositoryExecutions.$inferInsert;

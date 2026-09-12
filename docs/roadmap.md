@@ -62,13 +62,29 @@ ArchLens follows a staged, milestone-driven development roadmap. Each phase deli
 - Accessibility and responsive engineering: tested at 320px, 375px, 768px, 1024px, and 1440px viewports; full WAI-ARIA tab semantics (`role="tablist"`, `role="tab"`, `role="tabpanel"` with `tabIndex={0}`), focus visibility rings, `prefers-reduced-motion` compliance, and smooth horizontal tab scrolling with `scrollbar-none`
 - Hardened analyzer entrypoint discovery: updated `TEST_PATTERNS` to include `fixtures/`, `__fixtures__/`, and `__mocks__/`, and updated `detectLandmark` to reject test fixtures from being detected as primary entrypoints or production landmarks, ensuring monorepos like `facebook/react` surface genuine package entrypoints (`packages/react/index.js`, etc.)
 
-## Phase 6: Production Hardening, Deployment & Public Release — Planned
+## Phase 6: Client-Agnostic Sandboxed Execution & Live Preview Subsystem — Completed
 
-- Asynchronous task queues (Redis/BullMQ) for large analysis runs
-- Response caching layer
-- Public deployment configuration, telemetry, and rate limit defense
+- Client-agnostic execution engine: Reusable backend capability in `apps/api` and contracts in `packages/shared`, designed to serve Web, future VS Code extensions, and future browser extensions identically.
+- Centralized sandbox policy (`SandboxPolicy`): Strict limits enforced (max 25 files, 500 KB per file, 2 MB total workspace, 5,000ms default / 10,000ms max timeout, 64 KB output buffer).
+- Isolated workspace lifecycle (`WorkspaceManager`): Ephemeral sandbox directory provisioned under `/tmp/archlens-sandboxes/<uuid>` with restrictive `0o700` directory and `0o600` file permissions; strict rejection of directory traversal (`..`, absolute paths, null bytes); immediate cleanup upon completion.
+- Environment sanitization: Stripped `SAFE_ENV` provided to child processes (`PATH`, `NODE_ENV=production`, `HOME=/tmp`), ensuring zero host secrets (`GITHUB_TOKEN`, `GEMINI_API_KEY`, `DATABASE_URL`) or host user environment variables are inherited.
+- Process group termination (`ProcessSandboxRunner`): Child processes spawned as detached process group leaders. Timeouts trigger full process tree termination via `process.kill(-child.pid, 'SIGKILL')`.
+- Bounded stream collector (`OutputCollector`): Hard 64 KB buffer limit on stdout and stderr with explicit truncation notice.
+- Initial hardened profiles: `node-script` (standalone JavaScript/Node entrypoints) and `static-web` (HTML/CSS/JS frontend entrypoints).
+- Structured refusal taxonomy: Deny-by-default execution policy that safely refuses unsupported projects (Python, Go, Rust, Java, C++, Ruby, etc.) or missing entrypoints with structured reasons (`unsupported_runtime`, `missing_entrypoint`, `unsafe_project`, `exceeded_bounds`).
+- Isolated live static preview: Ephemeral preview workspaces with 15-minute TTL served via `GET /api/preview/:executionId/*` with strict path confinement, MIME type resolution, and Content Security Policy (`default-src 'self'`). Rendered in sandboxed iframes.
+- Execution history observability: PostgreSQL `repository_executions` logging execution ID, profile, status, exit code, duration, refusal reason, and timestamp.
+- Fastify REST API: `GET /api/repositories/:owner/:repo/eligibility`, `POST /api/repositories/:owner/:repo/execute`, `GET /api/preview/:executionId/*`.
+- Interactive web UI: `Run & Preview` tab (`ExecutionView`) with real-time eligibility determination, profile selector, entrypoint dropdown, argument input, timeout controls, execution metadata bar, monospace console output, and responsive live iframe preview.
+- Rigorous automated verification: 126 unit and live sandbox integration tests (testing real process spawning, zero secret inheritance, process group SIGKILL, output truncation, and static preview resolution).
 
-## Phase 7+: Future Clients — Planned
+## Phase 7: Production Hardening, Deployment & Scale — Planned
 
-- Browser extension for inline GitHub repository exploration
+- Asynchronous task queues (Redis/BullMQ) for large execution runs
+- Public deployment configuration, rate limit defense, and edge firewall protections
+
+## Phase 8+: Future Clients — Planned
+
+- VS Code extension leveraging the client-agnostic execution API
+- Browser extension for inline GitHub repository exploration and live execution
 - Cross-platform desktop client
