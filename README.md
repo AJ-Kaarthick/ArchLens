@@ -8,9 +8,9 @@ ArchLens is an open-source platform that enables developers, contributors, and t
 
 ## Project Status
 
-**Current Status:** Phase 4 Complete (Deterministic Ingestion, Architecture Analysis, Grounded AI Explanations & Semantic Repository Retrieval).
+**Current Status:** Phase 5 Complete (Product Refinement, UI/UX Quality & Polished Developer Experience).
 
-ArchLens features a fully functional, deterministic repository analysis engine, paired with a grounded AI reasoning layer, intelligent code chunking with dual-mode vector search (PostgreSQL `pgvector` with relational cosine fallback), and an interactive React explorer.
+ArchLens features a fully functional, deterministic repository analysis engine, paired with a grounded AI reasoning layer, intelligent code chunking with dual-mode vector search (PostgreSQL `pgvector` with relational cosine fallback), and a refined, responsive React developer explorer built on accessible UI primitives.
 
 ---
 
@@ -26,24 +26,29 @@ ArchLens solves this by establishing a **factual, deterministic baseline** first
 
 ---
 
-## What Works Today (Phase 1, Phase 2, Phase 3 & Phase 4)
+## What Works Today (Phase 1 through Phase 5)
 
 - **Bounded GitHub Ingestion:** Fetches repository metadata and recursive file trees via the GitHub REST API v3 without git cloning.
 - **Safety Bounds:** Enforces a strict 10,000-item tree bound, 256 KB landmark file preview bound, max 100 files, and max 500 code chunks per repository.
 - **Rate-Limit Resilience:** Transparently detects GitHub API 403/429 limits, calculates exact reset timestamps from response headers, and returns structured recovery instructions.
 - **Deterministic Tech Stack Detection:** Accurately extracts dependencies, build systems, styling engines, test runners, and database libraries from manifests (`package.json`, `Cargo.toml`, `go.mod`, `pyproject.toml`, etc.) with confidence levels and source evidence.
 - **Architecture Pattern Detection:** Automatically identifies monorepo tools (`pnpm`, `Turborepo`, `Nx`, `Lerna`), workspace packages, client-server separation, layered service directories, and primary entrypoints.
+- **Hardened Entrypoint & Landmark Detection:** Explicitly excludes test fixtures, mocks, and test directories (`fixtures/`, `__fixtures__/`, `__mocks__/`, `tests/`) from being classified as primary entrypoints or production landmarks, ensuring monorepos like `facebook/react` accurately surface real package entrypoints (`packages/react/index.js`, etc.).
 - **Structural Metrics:** Computes language breakdowns, file category distributions, total bytes, and identifies top 10 largest files.
 - **Semantic Code Retrieval & Search:** Line-aware chunking engine (50 lines per chunk, 10-line overlap) for source, doc, and config files with metadata filtering (category and limit in the UI; pathPrefix at the API level), similarity score ranking, and execution timing—operating purely on indexed text slices without executing repository code.
 - **Dual-Mode Vector Persistence:** PostgreSQL `code_chunks` table supporting native `pgvector` (HNSW cosine distance) when the extension is available, with an automatic, zero-crash relational and in-memory cosine similarity fallback.
 - **Embedding Provider Abstraction:** Flexible backend interface (`IEmbeddingProvider`) supporting Google Gemini (`text-embedding-004` via `@google/genai`) and a deterministic `MockEmbeddingProvider` for 100% offline development and testing without API keys.
 - **Grounded AI Explanation Layer:** Generates fact-backed architectural explanations across four distinct topics: Repository Overview, Architecture & Patterns, Tech Stack Synergy, and Runtime Entrypoints, augmented by relevant semantic code slices. `EvidenceValidator` remains strictly authoritative over all retrieved context and generated claims.
-- **Evidence Citations:** Every AI explanation includes verifiable citations pointing directly to real manifests, landmark files, dependencies, entrypoints, and structural metrics.
+- **Evidence Citations:** Every AI explanation includes verifiable citations pointing directly to real manifests, landmark files, dependencies, entrypoints, and structural metrics with one-click modal previews.
 - **Prompt-Injection Defense:** Untrusted repository content (README, description, and retrieved code chunks) is bounded, sanitized, and isolated inside `<untrusted_content>` tags, preventing malicious repository instructions from subverting AI reasoning.
 - **AI Provider Abstraction:** Backend interface (`IAIProvider`) supporting Google Gemini (`gemini-2.0-flash`) and a deterministic `MockAIProvider`.
-- **PostgreSQL Explanation Caching:** Explanations are cached in `ai_explanations` keyed on `(analysis_id, topic, target)` for instant, zero-token replay.
+- **PostgreSQL Explanation Caching:** Explanations are cached in `ai_explanations` keyed on `(analysis_id, topic, target)` for instant, zero-token replay with transparent cache hit indicators.
 - **Fastify REST API:** Synchronous endpoints for analysis (`POST /api/analyze`), latest snapshot (`GET /api/repositories/:owner/:repo/latest`), landmark previews (`GET /api/repositories/:owner/:repo/landmark-content`), AI explanations (`POST /api/repositories/:owner/:repo/explain`), and semantic search (`POST /api/repositories/:owner/:repo/search`).
-- **React Web Explorer:** Modern UI built with Tailwind CSS, Lucide icons, interactive collapsible file tree, metric progress bars, safe markdown previewing, interactive **AI Insights** tab, and dedicated **Semantic Search** view with natural language query input, quick example suggestions, category dropdown, limit selector, similarity score badges, line ranges, and direct file navigation. (Category filtering and result-limit controls are present in the current UI; `pathPrefix` filtering is supported at the API level).
+- **Reusable UI Component System:** Clean, zero-dependency design primitives (`Button`, `Card`, `Badge`, `Input`, `Select`, `Skeleton`, `EmptyState`) built directly with Tailwind CSS and Lucide React.
+- **Polished Developer Experience & Onboarding:** Persistent application shell, 3-pillar architectural onboarding guide for new visitors, and one-click quick presets (`fastify/fastify`, `facebook/react`, `gin-gonic/gin`, `tokio-rs/tokio`, `tiangolo/fastapi`).
+- **Refined Explorer Views:** Collapsible folder file tree with search filtering, accessible modal landmark viewer with background backdrop click and Escape-key dismiss, stacked language composition bar with tooltips, and categorized tech stack cards.
+- **Semantic Search Polish & Transparency:** Query clear button, category filter dropdown, limit selector, snippet copy buttons, similarity score badges, and a collapsible disclosure drawer explaining the local "Relational Cosine Fallback" mode.
+- **Accessible & Responsive Architecture:** Full WAI-ARIA tab semantics (`role="tablist"`, `role="tab"`, `role="tabpanel"`), visible focus rings, `prefers-reduced-motion` compliance, and smooth horizontal tab scrolling verified across mobile, tablet, and desktop viewports.
 
 ---
 

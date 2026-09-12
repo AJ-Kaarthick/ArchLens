@@ -19,6 +19,10 @@ describe('Deterministic Analyzer', () => {
       expect(categorizePath('__tests__/index.tsx')).toBe('test');
       expect(categorizePath('pkg/server_test.go')).toBe('test');
       expect(categorizePath('tests/test_auth.py')).toBe('test');
+      expect(categorizePath('fixtures/attribute-behavior/src/index.js')).toBe('test');
+      expect(categorizePath('fixtures/dom/src/index.js')).toBe('test');
+      expect(categorizePath('__fixtures__/sample.js')).toBe('test');
+      expect(categorizePath('__mocks__/axios.ts')).toBe('test');
     });
 
     it('categorizes CI workflows', () => {
@@ -87,6 +91,15 @@ describe('Deterministic Analyzer', () => {
       const server = detectLandmark('src/server.ts');
       expect(server).not.toBeNull();
       expect(server?.type).toBe('entry');
+    });
+
+    it('rejects test, fixture, and mock files as landmarks', () => {
+      expect(detectLandmark('fixtures/attribute-behavior/src/index.js')).toBeNull();
+      expect(detectLandmark('fixtures/dom/src/index.js')).toBeNull();
+      expect(detectLandmark('tests/index.ts')).toBeNull();
+      expect(detectLandmark('__tests__/server.ts')).toBeNull();
+      expect(detectLandmark('__mocks__/index.js')).toBeNull();
+      expect(detectLandmark('packages/react/index.js')?.type).toBe('entry');
     });
 
     it('builds file tree items with landmark flag and categories', () => {
@@ -171,6 +184,21 @@ describe('Deterministic Analyzer', () => {
       expect(arch.detectedPatterns).toContain('Containerized');
       expect(arch.primaryEntrypoints).toContain('apps/web/src/App.tsx');
       expect(arch.primaryEntrypoints).toContain('apps/api/src/server.ts');
+    });
+
+    it('excludes fixture files and discovers package entrypoints in monorepos', () => {
+      const tree: RawGitTreeItem[] = [
+        { path: 'fixtures/attribute-behavior/src/index.js', mode: '100644', type: 'blob', sha: '1', size: 50 },
+        { path: 'fixtures/dom/src/index.js', mode: '100644', type: 'blob', sha: '2', size: 50 },
+        { path: 'packages/react/index.js', mode: '100644', type: 'blob', sha: '3', size: 500 },
+        { path: 'packages/react-dom/index.js', mode: '100644', type: 'blob', sha: '4', size: 500 },
+      ];
+
+      const arch = detectArchitecture(tree, {});
+      expect(arch.primaryEntrypoints).not.toContain('fixtures/attribute-behavior/src/index.js');
+      expect(arch.primaryEntrypoints).not.toContain('fixtures/dom/src/index.js');
+      expect(arch.primaryEntrypoints).toContain('packages/react/index.js');
+      expect(arch.primaryEntrypoints).toContain('packages/react-dom/index.js');
     });
   });
 

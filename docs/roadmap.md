@@ -49,14 +49,18 @@ ArchLens follows a staged, milestone-driven development roadmap. Each phase deli
 - Evidence grounding: `EvidenceValidator` remains strictly authoritative over all retrieved context and AI claims
 - Zero code execution: Repository code is never executed during semantic indexing or retrieval
 - Fastify search route: `POST /api/repositories/:owner/:repo/search` with structured error handling and validation
-- Interactive React UI: `SemanticSearchView` tab with query bar, example suggestions, category dropdown, limit selector, score badges, line ranges, and direct navigation to file contents (API supports `pathPrefix`; UI path prefix input planned for Phase 5)
+- Interactive React UI: `SemanticSearchView` tab with query bar, example suggestions, category dropdown, limit selector, score badges, line ranges, and direct navigation to file contents
 - Operational fallback path: Default local dev environment uses standard PostgreSQL with relational in-memory cosine fallback; production evaluation requires `pgvector`-enabled PostgreSQL and real Gemini embeddings
 
-## Phase 5: Product Refinement & UI/UX Quality — Planned
+## Phase 5: Product Refinement & UI/UX Quality — Completed
 
-- Architecture diagram visualizations
-- Deep cross-file navigation and dependency visualization
-- Polished responsive layouts and theme refinements
+- Reusable design token and UI primitive component system (`Button`, `Card`, `Badge`, `Input`, `Select`, `Skeleton`, `EmptyState`) in `apps/web/src/components/ui/` with zero external component library bloat
+- Developer onboarding shell featuring a 3-pillar architectural overview for first-time visitors, system status indicators, and 5 curated quick presets (`fastify/fastify`, `facebook/react`, `gin-gonic/gin`, `tokio-rs/tokio`, `tiangolo/fastapi`)
+- Refined deterministic Explorer: collapsible folder file tree with search filter and match counter, accessible modal landmark viewer with Escape-key / backdrop dismiss and clipboard copy feedback, stacked language composition bar with tooltips, and categorized tech stack grid with confidence and manifest evidence
+- Grounded AI Insights refinement: prominent fact-supremacy disclaimer banner, 4 topic selector buttons with descriptions, target path input with Enter-key trigger, multi-card skeleton loaders, PostgreSQL cache hit badge vs freshly generated badge, and grounded evidence citations with direct landmark view links
+- Semantic Search refinement: natural language query input with clear button, category filter dropdown, limit selector, snippet copy buttons, similarity score badges, and a collapsible disclosure drawer explaining the local "Relational Cosine Fallback" behavior
+- Accessibility and responsive engineering: tested at 320px, 375px, 768px, 1024px, and 1440px viewports; full WAI-ARIA tab semantics (`role="tablist"`, `role="tab"`, `role="tabpanel"` with `tabIndex={0}`), focus visibility rings, `prefers-reduced-motion` compliance, and smooth horizontal tab scrolling with `scrollbar-none`
+- Hardened analyzer entrypoint discovery: updated `TEST_PATTERNS` to include `fixtures/`, `__fixtures__/`, and `__mocks__/`, and updated `detectLandmark` to reject test fixtures from being detected as primary entrypoints or production landmarks, ensuring monorepos like `facebook/react` surface genuine package entrypoints (`packages/react/index.js`, etc.)
 
 ## Phase 6: Production Hardening, Deployment & Public Release — Planned
 

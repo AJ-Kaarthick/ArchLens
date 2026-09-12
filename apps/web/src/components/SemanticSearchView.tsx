@@ -2,18 +2,34 @@ import React, { useState } from 'react';
 import {
   Search,
   Code2,
-  FileCode,
   Sparkles,
   Clock,
   AlertCircle,
   ExternalLink,
   Database,
+  Copy,
+  Check,
+  Info,
+  ChevronDown,
+  ChevronUp,
+  X,
 } from 'lucide-react';
-import type { RepositoryMetadata, SearchResponse, ApiError, FileCategory } from '@archlens/shared';
+import type {
+  RepositoryMetadata,
+  SearchResponse,
+  ApiError,
+  FileCategory,
+} from '@archlens/shared';
+import { Button } from './ui/Button.tsx';
+import { Card, CardHeader, CardTitle, CardContent } from './ui/Card.tsx';
+import { Badge } from './ui/Badge.tsx';
+import { Select } from './ui/Select.tsx';
+import { EmptyState } from './ui/EmptyState.tsx';
+import { CodeSnippetSkeleton } from './ui/Skeleton.tsx';
 
 interface SemanticSearchViewProps {
   repository: RepositoryMetadata;
-  onSelectFile?: (path: string) => void;
+  onSelectFile?: (_path: string) => void;
 }
 
 const EXAMPLE_QUERIES = [
@@ -31,6 +47,8 @@ export function SemanticSearchView({ repository, onSelectFile }: SemanticSearchV
   const [loading, setLoading] = useState(false);
   const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  const [showFallbackDetails, setShowFallbackDetails] = useState(false);
+  const [copiedSnippetIndex, setCopiedSnippetIndex] = useState<number | null>(null);
 
   const handleSearch = async (overrideQuery?: string) => {
     const q = (overrideQuery || query).trim();
@@ -44,7 +62,7 @@ export function SemanticSearchView({ repository, onSelectFile }: SemanticSearchV
     setError(null);
 
     try {
-      const payload: any = { query: q, limit };
+      const payload: Record<string, unknown> = { query: q, limit };
       if (selectedCategory) {
         payload.category = selectedCategory;
       }
@@ -68,7 +86,7 @@ export function SemanticSearchView({ repository, onSelectFile }: SemanticSearchV
         error: 'NetworkError',
         message: err instanceof Error ? err.message : 'Failed to connect to search API.',
         isRateLimit: false,
-        suggestedAction: 'Ensure backend server is running.',
+        suggestedAction: 'Ensure backend server is running on port 3000.',
       });
       setSearchResponse(null);
     } finally {
@@ -76,151 +94,233 @@ export function SemanticSearchView({ repository, onSelectFile }: SemanticSearchV
     }
   };
 
-  const getScoreBadgeColor = (score: number) => {
-    if (score >= 0.8) return 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60';
-    if (score >= 0.6) return 'bg-blue-950/80 text-blue-300 border-blue-800/60';
-    if (score >= 0.4) return 'bg-amber-950/80 text-amber-300 border-amber-800/60';
-    return 'bg-slate-800 text-slate-400 border-slate-700';
+  const handleCopySnippet = async (content: string, index: number) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedSnippetIndex(index);
+      setTimeout(() => setCopiedSnippetIndex(null), 2000);
+    } catch {
+      // Clipboard fallback
+    }
+  };
+
+  const getScoreBadge = (score: number) => {
+    const percentage = Math.round(score * 100);
+    if (score >= 0.8) {
+      return (
+        <Badge variant="success" size="xs" mono>
+          {percentage}% match
+        </Badge>
+      );
+    }
+    if (score >= 0.6) {
+      return (
+        <Badge variant="primary" size="xs" mono>
+          {percentage}% match
+        </Badge>
+      );
+    }
+    if (score >= 0.4) {
+      return (
+        <Badge variant="warning" size="xs" mono>
+          {percentage}% match
+        </Badge>
+      );
+    }
+    return (
+      <Badge variant="neutral" size="xs" mono>
+        {percentage}% match
+      </Badge>
+    );
   };
 
   return (
     <div className="space-y-6">
-      {/* Header & Description */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-6 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-cyan-500/10 rounded-lg text-cyan-400 border border-cyan-500/20">
-                <Search size={20} />
-              </div>
-              <h2 className="text-lg font-bold text-white tracking-tight">Semantic Code Search</h2>
+      {/* Search Bar Panel */}
+      <Card variant="default">
+        <CardHeader className="pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <CardTitle className="text-base">
+                <Search size={17} className="text-cyan-400" />
+                Semantic Repository Search
+              </CardTitle>
+              <p className="text-xs text-slate-400 max-w-2xl">
+                Search code slices and landmarks using natural language concepts. Semantic retrieval
+                locates relevant implementation slices without executing repository code.
+              </p>
             </div>
-            <p className="text-xs text-slate-400 max-w-2xl">
-              Search code chunks and landmarks using natural language concepts. Semantic retrieval
-              locates relevant implementation slices without executing untrusted repository code.
-            </p>
-          </div>
 
-          {searchResponse && (
-            <div className="flex items-center gap-2 self-start sm:self-auto">
-              <span
-                className={`text-[11px] px-2.5 py-1 rounded-full border flex items-center gap-1.5 font-medium ${
-                  searchResponse.fallback
-                    ? 'bg-amber-950/60 text-amber-300 border-amber-800/50'
-                    : 'bg-cyan-950/60 text-cyan-300 border-cyan-800/50'
-                }`}
-              >
-                <Database size={12} />
-                {searchResponse.fallback ? 'Relational Cosine Fallback' : 'pgvector HNSW Index'}
-              </span>
-              <span className="text-[11px] text-slate-500 flex items-center gap-1">
-                <Clock size={12} />
-                {searchResponse.durationMs}ms
-              </span>
+            {searchResponse && (
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setShowFallbackDetails(!showFallbackDetails)}
+                  aria-expanded={showFallbackDetails}
+                  aria-controls="fallback-details-drawer"
+                  className={`text-xs px-2.5 py-1 rounded-lg border flex items-center gap-1.5 font-medium transition cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 ${
+                    searchResponse.fallback
+                      ? 'bg-amber-950/50 text-amber-300 border-amber-800/60 hover:bg-amber-950/80'
+                      : 'bg-cyan-950/50 text-cyan-300 border-cyan-800/60 hover:bg-cyan-950/80'
+                  }`}
+                  title="Click for retrieval mode details"
+                >
+                  <Database size={12} />
+                  <span>{searchResponse.fallback ? 'Relational Cosine Fallback' : 'pgvector HNSW Index'}</span>
+                  {showFallbackDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+
+                <span className="text-[11px] text-slate-500 flex items-center gap-1 font-mono">
+                  <Clock size={12} />
+                  {searchResponse.durationMs}ms
+                </span>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+
+        <CardContent className="pt-2 space-y-3">
+          {/* Fallback Explanation Collapsible Drawer */}
+          {searchResponse?.fallback && showFallbackDetails && (
+            <div
+              id="fallback-details-drawer"
+              role="region"
+              aria-label="Retrieval mode explanation"
+              className="p-3.5 bg-amber-950/30 border border-amber-800/50 rounded-xl space-y-1.5 text-xs text-amber-200/90 animate-in fade-in duration-150"
+            >
+              <div className="font-semibold flex items-center gap-1.5 text-amber-300">
+                <Info size={14} />
+                <span>Operating in Relational Cosine Fallback Mode</span>
+              </div>
+              <p className="leading-relaxed opacity-90">
+                The local PostgreSQL development instance does not have the native{' '}
+                <code className="bg-black/30 px-1 py-0.5 rounded font-mono text-amber-100">pgvector</code>{' '}
+                extension installed. ArchLens automatically fell back to in-memory cosine similarity
+                ranking over stored embeddings. This intentional graceful-degradation path guarantees
+                zero crashes during local development, but is not representative of production pgvector
+                HNSW scale or latency.
+              </p>
             </div>
           )}
-        </div>
 
-        {/* Search Bar */}
-        <div className="mt-6 space-y-3">
+          {/* Search Input & Filtering Form */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               handleSearch();
             }}
-            className="flex flex-col sm:flex-row gap-2"
+            className="flex flex-col sm:flex-row gap-2.5"
           >
             <div className="relative flex-1">
               <Search
-                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500"
+                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"
                 size={16}
               />
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Ask about an architectural component or feature (e.g. 'how is rate limiting handled?')"
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition"
+                placeholder="Ask about architectural components (e.g. 'how is rate limiting handled?')"
+                aria-label="Semantic search query"
+                className="w-full bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-xl pl-10 pr-20 py-2.5 text-xs sm:text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 focus:border-cyan-500 transition"
               />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-0.5"
+                  title="Clear search query"
+                >
+                  <X size={13} />
+                </button>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
-              <select
+              <Select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value as FileCategory | '')}
                 aria-label="Filter by file category"
-                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-500 transition"
+                selectSize="md"
               >
                 <option value="">All Categories</option>
                 <option value="source">Source Code</option>
                 <option value="doc">Documentation</option>
                 <option value="config">Configuration</option>
-              </select>
+              </Select>
 
-              <select
+              <Select
                 value={limit}
                 onChange={(e) => setLimit(Number(e.target.value))}
                 aria-label="Result limit"
-                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-500 transition"
+                selectSize="md"
               >
                 <option value={3}>Top 3</option>
                 <option value={5}>Top 5</option>
                 <option value={10}>Top 10</option>
                 <option value={20}>Top 20</option>
-              </select>
+              </Select>
 
-              <button
+              <Button
                 type="submit"
+                variant="primary"
+                size="md"
+                loading={loading}
                 disabled={loading || query.trim().length < 2}
-                className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-medium text-xs rounded-lg transition shadow-sm cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-1.5 shrink-0"
+                icon={<Sparkles size={14} />}
+                className="shrink-0 bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 border-cyan-500/30"
               >
-                {loading ? (
-                  <>
-                    <div className="w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                    Searching...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={14} />
-                    Search
-                  </>
-                )}
-              </button>
+                {loading ? 'Searching...' : 'Search'}
+              </Button>
             </div>
           </form>
 
-          {/* Quick Examples */}
+          {/* Quick Example Queries */}
           <div className="flex items-center gap-1.5 flex-wrap pt-1">
             <span className="text-[11px] font-medium text-slate-500 mr-1">Try asking:</span>
             {EXAMPLE_QUERIES.map((example, i) => (
               <button
                 key={i}
+                type="button"
                 onClick={() => handleSearch(example)}
-                className="text-[11px] px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-cyan-300 rounded-md border border-slate-800/80 transition cursor-pointer"
+                disabled={loading}
+                className="text-[11px] px-2.5 py-1 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-cyan-300 rounded-lg border border-slate-800 hover:border-slate-700 transition cursor-pointer"
               >
                 {example}
               </button>
             ))}
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       {/* Error Message */}
       {error && (
-        <div className="p-4 rounded-xl border bg-red-950/40 border-red-800/60 text-red-200 flex items-start gap-3">
+        <div
+          role="alert"
+          className="p-4 rounded-xl border bg-red-950/40 border-red-800/60 text-red-200 flex items-start gap-3 text-xs"
+        >
           <AlertCircle size={18} className="text-red-400 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <div className="text-xs font-semibold">{error.error || 'Search Error'}</div>
-            <p className="text-xs text-red-300/90">{error.message}</p>
+            <div className="font-semibold">{error.error || 'Search Error'}</div>
+            <p className="opacity-90">{error.message}</p>
             {error.suggestedAction && (
-              <p className="text-[11px] text-white/80 mt-1">Tip: {error.suggestedAction}</p>
+              <p className="font-medium text-white/95 mt-1">Tip: {error.suggestedAction}</p>
             )}
           </div>
         </div>
       )}
 
-      {/* Search Results List */}
-      {searchResponse && (
+      {/* Loading Skeletons */}
+      {loading && (
+        <div className="space-y-4">
+          <CodeSnippetSkeleton />
+          <CodeSnippetSkeleton />
+          <CodeSnippetSkeleton />
+        </div>
+      )}
+
+      {/* Search Results Display */}
+      {!loading && searchResponse && (
         <div className="space-y-4">
           <div className="flex items-center justify-between px-1">
             <span className="text-xs font-semibold text-slate-300">
@@ -231,31 +331,27 @@ export function SemanticSearchView({ repository, onSelectFile }: SemanticSearchV
           </div>
 
           {searchResponse.results.length === 0 ? (
-            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-12 text-center space-y-3">
-              <FileCode size={36} className="mx-auto text-slate-600" />
-              <h3 className="text-sm font-semibold text-slate-300">
-                No matching code slices found
-              </h3>
-              <p className="text-xs text-slate-500 max-w-sm mx-auto">
-                No code chunks exceeded the similarity threshold for this query. Try broader
-                keywords or clear the category filter.
-              </p>
-            </div>
+            <EmptyState
+              icon={<Code2 size={24} />}
+              title="No matching code slices found"
+              description="No code chunks exceeded the similarity threshold for this query. Try using broader keywords or clearing the category filter."
+            />
           ) : (
             <div className="space-y-4">
               {searchResponse.results.map((item, idx) => (
                 <div
                   key={`${item.filePath}-${item.chunkIndex}-${idx}`}
-                  className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm hover:border-slate-700 transition"
+                  className="bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden shadow-sm hover:border-slate-700 transition"
                 >
                   {/* Card Header */}
-                  <div className="bg-slate-950/60 px-4 py-2.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                  <div className="bg-slate-950/70 px-4 py-2.5 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <Code2 size={15} className="text-cyan-400" />
+                      <Code2 size={15} className="text-cyan-400 shrink-0" />
                       <button
+                        type="button"
                         onClick={() => onSelectFile?.(item.filePath)}
-                        className="text-xs font-mono font-semibold text-cyan-300 hover:text-cyan-200 hover:underline flex items-center gap-1 cursor-pointer"
-                        title="Click to view full file content"
+                        className="text-xs font-mono font-semibold text-cyan-300 hover:text-cyan-200 hover:underline flex items-center gap-1 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500"
+                        title="Click to view full landmark content"
                       >
                         {item.filePath}
                         <ExternalLink size={11} className="opacity-70" />
@@ -267,20 +363,28 @@ export function SemanticSearchView({ repository, onSelectFile }: SemanticSearchV
 
                     <div className="flex items-center gap-2">
                       {item.language && (
-                        <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                        <Badge variant="neutral" size="xs" mono>
                           {item.language}
-                        </span>
+                        </Badge>
                       )}
-                      <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">
+                      <Badge variant="neutral" size="xs" mono>
                         {item.category}
-                      </span>
-                      <span
-                        className={`text-[11px] font-semibold px-2 py-0.5 rounded-full border ${getScoreBadgeColor(
-                          item.score
-                        )}`}
+                      </Badge>
+                      {getScoreBadge(item.score)}
+
+                      <button
+                        type="button"
+                        onClick={() => handleCopySnippet(item.content, idx)}
+                        className="p-1 text-slate-400 hover:text-white rounded transition cursor-pointer"
+                        title="Copy snippet"
+                        aria-label="Copy snippet code"
                       >
-                        {Math.round(item.score * 100)}% match
-                      </span>
+                        {copiedSnippetIndex === idx ? (
+                          <Check size={13} className="text-emerald-400" />
+                        ) : (
+                          <Copy size={13} />
+                        )}
+                      </button>
                     </div>
                   </div>
 
@@ -299,16 +403,11 @@ export function SemanticSearchView({ repository, onSelectFile }: SemanticSearchV
 
       {/* Initial Empty State */}
       {!searchResponse && !loading && !error && (
-        <div className="bg-slate-900/40 border border-slate-800/80 rounded-xl p-12 text-center space-y-3">
-          <div className="p-3 bg-cyan-500/10 rounded-full w-fit mx-auto text-cyan-400 border border-cyan-500/20">
-            <Search size={28} />
-          </div>
-          <h3 className="text-sm font-semibold text-slate-200">Explore Implementation Slices</h3>
-          <p className="text-xs text-slate-400 max-w-md mx-auto">
-            Type a natural language concept above or pick one of the example queries to discover
-            where components are defined and structured across the codebase.
-          </p>
-        </div>
+        <EmptyState
+          icon={<Search size={24} className="text-cyan-400" />}
+          title="Explore Implementation Slices"
+          description="Type a natural language concept above or pick one of the example queries to discover where features, patterns, and modules are defined across the repository."
+        />
       )}
     </div>
   );

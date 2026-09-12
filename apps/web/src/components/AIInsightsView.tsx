@@ -8,7 +8,7 @@ import type {
 } from '@archlens/shared';
 import ReactMarkdown from 'react-markdown';
 import {
-  LucideIcon,
+  type LucideIcon,
   Sparkles,
   Layers,
   Cpu,
@@ -23,18 +23,44 @@ import {
   Clock,
   AlertCircle,
   ExternalLink,
+  ShieldCheck,
+  Info,
 } from 'lucide-react';
+import { Button } from './ui/Button.tsx';
+import { Card, CardHeader, CardTitle, CardContent } from './ui/Card.tsx';
+import { Badge } from './ui/Badge.tsx';
+import { Skeleton, CardSkeleton } from './ui/Skeleton.tsx';
 
 interface AIInsightsViewProps {
   analysis: AnalysisResult;
   onSelectFile?: (_path: string) => void;
 }
 
-const TOPICS: { id: ExplainTopic; label: string; icon: LucideIcon }[] = [
-  { id: 'overview', label: 'Repository Overview', icon: Sparkles },
-  { id: 'architecture', label: 'Architecture & Patterns', icon: Layers },
-  { id: 'tech-stack', label: 'Tech Stack Synergy', icon: Cpu },
-  { id: 'entrypoints', label: 'Runtime Entrypoints', icon: Compass },
+const TOPICS: { id: ExplainTopic; label: string; icon: LucideIcon; desc: string }[] = [
+  {
+    id: 'overview',
+    label: 'Repository Overview',
+    icon: Sparkles,
+    desc: 'High-level purpose, scale, structural layout, and core ecosystem.',
+  },
+  {
+    id: 'architecture',
+    label: 'Architecture & Patterns',
+    icon: Layers,
+    desc: 'Layered patterns, monorepo packages, and cross-boundary responsibilities.',
+  },
+  {
+    id: 'tech-stack',
+    label: 'Tech Stack Synergy',
+    icon: Cpu,
+    desc: 'How detected runtimes, frameworks, and databases interact.',
+  },
+  {
+    id: 'entrypoints',
+    label: 'Runtime Entrypoints',
+    icon: Compass,
+    desc: 'System boot sequences, listeners, and execution flow.',
+  },
 ];
 
 export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSelectFile }) => {
@@ -73,19 +99,19 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
         error: 'NetworkError',
         message: err instanceof Error ? err.message : 'Failed to generate explanation.',
         isRateLimit: false,
-        suggestedAction: 'Ensure the ArchLens API server is running.',
+        suggestedAction: 'Ensure the ArchLens API server is running on port 3000.',
       });
     } finally {
       setLoading(false);
     }
   };
 
-  // Fetch initial explanation when mounted or when topic changes
   useEffect(() => {
     fetchExplanation(selectedTopic, targetInput);
   }, [selectedTopic, analysis.repository.owner, analysis.repository.name]);
 
   const handleTopicChange = (topic: ExplainTopic) => {
+    if (topic === selectedTopic) return;
     setSelectedTopic(topic);
   };
 
@@ -93,29 +119,29 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
     fetchExplanation(selectedTopic, targetInput);
   };
 
-  const getEvidenceBadge = (citation: EvidenceCitation) => {
+  const getEvidenceCitationCard = (citation: EvidenceCitation, idx: number) => {
     const isPath =
       citation.type === 'file' || citation.type === 'manifest' || citation.type === 'entrypoint';
 
-    const getColors = () => {
+    const getCitationBadgeVariant = (): 'success' | 'purple' | 'warning' | 'cyan' | 'danger' | 'primary' => {
       switch (citation.type) {
         case 'manifest':
-          return 'bg-emerald-950 text-emerald-300 border-emerald-800';
+          return 'success';
         case 'entrypoint':
-          return 'bg-purple-950 text-purple-300 border-purple-800';
+          return 'purple';
         case 'dependency':
-          return 'bg-amber-950 text-amber-300 border-amber-800';
+          return 'warning';
         case 'metric':
-          return 'bg-cyan-950 text-cyan-300 border-cyan-800';
+          return 'cyan';
         case 'pattern':
-          return 'bg-rose-950 text-rose-300 border-rose-800';
+          return 'danger';
         case 'file':
         default:
-          return 'bg-blue-950 text-blue-300 border-blue-800';
+          return 'primary';
       }
     };
 
-    const getIcon = () => {
+    const getCitationIcon = () => {
       switch (citation.type) {
         case 'manifest':
           return <FileCheck2 size={13} className="shrink-0" />;
@@ -135,33 +161,35 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
 
     return (
       <div
-        key={`${citation.type}-${citation.reference}`}
-        className={`p-3 rounded-lg border flex flex-col justify-between ${getColors()}`}
+        key={`${citation.type}-${citation.reference}-${idx}`}
+        className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800/90 hover:border-slate-700 transition flex flex-col justify-between space-y-2"
       >
-        <div className="flex items-start justify-between gap-2 mb-1.5">
-          <div className="flex items-center gap-1.5 font-medium text-xs">
-            {getIcon()}
-            <span>{citation.label}</span>
-          </div>
-          <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/30 opacity-80 font-mono">
+        <div className="flex items-center justify-between gap-2">
+          <Badge variant={getCitationBadgeVariant()} size="xs" icon={getCitationIcon()}>
+            {citation.label}
+          </Badge>
+          <span className="text-[10px] uppercase tracking-wider text-slate-500 font-mono">
             {citation.type}
           </span>
         </div>
 
-        <div className="font-mono text-xs font-semibold break-all text-white/95 my-1">
+        <div className="font-mono text-xs font-semibold text-slate-200 break-all bg-slate-900/60 p-1.5 rounded border border-slate-800/60">
           {citation.reference}
         </div>
 
         {citation.description && (
-          <p className="text-[11px] opacity-80 mt-1 leading-relaxed">{citation.description}</p>
+          <p className="text-[11px] text-slate-400 leading-relaxed line-clamp-2">
+            {citation.description}
+          </p>
         )}
 
         {isPath && onSelectFile && (
           <button
+            type="button"
             onClick={() => onSelectFile(citation.reference)}
-            className="mt-2 text-[11px] inline-flex items-center gap-1 opacity-90 hover:opacity-100 underline cursor-pointer"
+            className="pt-1 text-[11px] text-blue-400 hover:text-blue-300 inline-flex items-center gap-1 font-medium transition cursor-pointer self-start"
           >
-            <span>View file</span>
+            <span>Inspect Landmark Content</span>
             <ExternalLink size={10} />
           </button>
         )}
@@ -171,55 +199,81 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
 
   return (
     <div className="space-y-6">
-      {/* Control Bar: Topics and Target Filter */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        {/* Topic Selector Tabs */}
-        <div className="flex flex-wrap gap-2">
-          {TOPICS.map((t) => {
-            const Icon = t.icon;
-            const active = selectedTopic === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => handleTopicChange(t.id)}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
-                  active
-                    ? 'bg-blue-600 text-white shadow-sm font-semibold'
-                    : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700'
-                }`}
-              >
-                <Icon size={14} />
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Optional Target Input & Refresh Button */}
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="Focus target (e.g. apps/api)..."
-            value={targetInput}
-            onChange={(e) => setTargetInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleRefresh()}
-            className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 w-48 md:w-56"
-          />
-          <button
-            onClick={handleRefresh}
-            disabled={loading}
-            title="Refresh explanation"
-            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg border border-slate-700 transition cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          </button>
+      {/* Fact Supremacy & AI Boundary Banner */}
+      <div className="p-4 rounded-xl bg-slate-900/40 border border-slate-800/80 flex items-start gap-3 text-xs text-slate-400">
+        <ShieldCheck size={16} className="text-blue-400 shrink-0 mt-0.5" />
+        <div className="space-y-0.5">
+          <span className="font-semibold text-slate-300">
+            Factual Baseline Supremacy:
+          </span>{' '}
+          Deterministic Phase 2 repository analysis (manifests, trees, metrics) remains the sole
+          authoritative source of truth. AI Insights synthesize narrative interpretations grounded
+          in verifiable citations audited by <code className="text-slate-300 font-mono">EvidenceValidator</code>.
         </div>
       </div>
 
-      {/* Error Banner */}
+      {/* Controls: Topics Tabs & Focus Target Input */}
+      <Card variant="default">
+        <CardContent className="p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          {/* Topic Selector Tabs */}
+          <div className="flex flex-wrap gap-2">
+            {TOPICS.map((t) => {
+              const Icon = t.icon;
+              const active = selectedTopic === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => handleTopicChange(t.id)}
+                  disabled={loading && !explanation}
+                  aria-pressed={active}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                    active
+                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
+                      : 'bg-slate-950/80 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'
+                  }`}
+                  title={t.desc}
+                >
+                  <Icon size={14} className={active ? 'text-white' : 'text-slate-400'} />
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Target Focus Input & Refresh */}
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Target path (e.g. apps/api)..."
+                value={targetInput}
+                onChange={(e) => setTargetInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleRefresh()}
+                aria-label="Focus explanation on specific repository path"
+                className="bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 w-48 sm:w-56"
+              />
+            </div>
+
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={loading}
+              onClick={handleRefresh}
+              icon={<RefreshCw size={13} />}
+              title="Regenerate or refresh explanation"
+            >
+              Refresh
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Error Alert */}
       {error && (
         <div
-          className={`border rounded-xl p-4 flex items-start gap-3 ${
+          role="alert"
+          className={`border rounded-xl p-4 flex items-start gap-3 text-xs ${
             error.isRateLimit
               ? 'bg-amber-950/40 border-amber-800/80 text-amber-200'
               : 'bg-red-950/40 border-red-800/80 text-red-200'
@@ -231,47 +285,60 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
             <AlertCircle size={18} className="text-red-400 shrink-0 mt-0.5" />
           )}
           <div className="space-y-1">
-            <div className="font-semibold text-xs">
-              {error.isRateLimit ? 'AI Provider Rate Limit' : error.error || 'AI Explanation Error'}
+            <div className="font-semibold">
+              {error.isRateLimit ? 'AI Provider Quota / Rate Limit' : error.error || 'Generation Error'}
             </div>
-            <p className="text-xs opacity-90">{error.message}</p>
+            <p className="opacity-90">{error.message}</p>
             {error.suggestedAction && (
-              <p className="text-xs font-medium text-white/90">Tip: {error.suggestedAction}</p>
+              <p className="font-medium text-white/95 mt-1">Tip: {error.suggestedAction}</p>
             )}
           </div>
         </div>
       )}
 
-      {/* Loading State */}
-      {loading && !explanation && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center space-y-3">
-          <RefreshCw size={28} className="animate-spin text-blue-400 mx-auto" />
-          <div className="text-sm font-semibold text-slate-200">
-            Synthesizing deterministic repository facts...
+      {/* Loading Skeleton State */}
+      {loading && (
+        <div className="space-y-5 animate-pulse">
+          {/* Metadata Banner Skeleton */}
+          <div className="h-10 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center px-4 justify-between">
+            <Skeleton variant="text" className="w-48 h-4" />
+            <Skeleton variant="text" className="w-32 h-4" />
           </div>
-          <p className="text-xs text-slate-400 max-w-md mx-auto">
-            ArchLens AI is reasoning over verified manifests, AST patterns, dependency graphs, and
-            structural metrics.
-          </p>
+
+          {/* Executive Summary Skeleton */}
+          <CardSkeleton lines={3} />
+
+          {/* Takeaways Skeleton */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <CardSkeleton lines={2} />
+            <CardSkeleton lines={2} />
+          </div>
+
+          {/* Deep Analysis Skeleton */}
+          <div className="p-6 rounded-xl bg-slate-900/60 border border-slate-800/80 space-y-3">
+            <Skeleton variant="text" className="w-1/4 h-4 mb-4" />
+            <Skeleton variant="text" className="w-full h-3" />
+            <Skeleton variant="text" className="w-5/6 h-3" />
+            <Skeleton variant="text" className="w-4/5 h-3" />
+            <Skeleton variant="text" className="w-2/3 h-3" />
+          </div>
         </div>
       )}
 
-      {/* Content Display */}
-      {explanation && (
+      {/* Active Explanation Display */}
+      {!loading && explanation && (
         <div className="space-y-6">
-          {/* Metadata Banner: Cache status, Provider & Model */}
+          {/* Metadata & Cache Banner */}
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-slate-900/80 border border-slate-800 rounded-xl px-4 py-2.5">
-            <div className="flex items-center gap-2 text-slate-300">
+            <div className="flex items-center gap-2">
               {explanation.cached ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-800 font-medium">
-                  <Database size={12} />
-                  Cached in PostgreSQL (Zero token latency)
-                </span>
+                <Badge variant="success" size="sm" icon={<Database size={12} />}>
+                  PostgreSQL Cached Snapshot (Zero token latency)
+                </Badge>
               ) : (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-950/80 text-blue-300 border border-blue-800 font-medium">
-                  <Sparkles size={12} />
+                <Badge variant="primary" size="sm" icon={<Sparkles size={12} />}>
                   Freshly Generated by AI
-                </span>
+                </Badge>
               )}
             </div>
 
@@ -289,66 +356,87 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
           </div>
 
           {/* Executive Summary Card */}
-          <div className="bg-gradient-to-r from-blue-950/40 to-indigo-950/40 border border-blue-800/40 rounded-xl p-5 space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
-              <Sparkles size={14} />
-              Executive Summary
-            </div>
-            <p className="text-sm text-slate-200 leading-relaxed font-medium">
-              {explanation.summary}
-            </p>
-          </div>
+          <Card variant="default" className="border-blue-500/20 bg-gradient-to-r from-blue-950/20 to-slate-900/60">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-blue-400 text-xs uppercase tracking-wider">
+                <Sparkles size={14} />
+                Executive Summary
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-1">
+              <p className="text-sm text-slate-200 leading-relaxed font-medium">
+                {explanation.summary}
+              </p>
+            </CardContent>
+          </Card>
 
-          {/* Key Takeaways Grid */}
+          {/* Key Architectural Takeaways Grid */}
           {explanation.keyTakeaways.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                <CheckCircle2 size={14} className="text-emerald-400" />
-                Key Architectural Takeaways
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {explanation.keyTakeaways.map((takeaway, i) => (
-                  <div
-                    key={i}
-                    className="flex items-start gap-2.5 p-3 rounded-lg bg-slate-950/60 border border-slate-800/80 text-xs text-slate-300 leading-relaxed"
-                  >
-                    <span className="font-mono text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded shrink-0 mt-0.5">
-                      {i + 1}
-                    </span>
-                    <span>{takeaway}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <Card variant="default">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-xs uppercase tracking-wider text-slate-300">
+                  <CheckCircle2 size={15} className="text-emerald-400" />
+                  Key Architectural Takeaways
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {explanation.keyTakeaways.map((takeaway, i) => (
+                    <div
+                      key={i}
+                      className="flex items-start gap-3 p-3.5 rounded-xl bg-slate-950/70 border border-slate-800/80 text-xs text-slate-300 leading-relaxed"
+                    >
+                      <span className="font-mono text-[10px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded-md shrink-0 mt-0.5 font-bold">
+                        {i + 1}
+                      </span>
+                      <span>{takeaway}</span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           )}
 
-          {/* Detailed Markdown Explanation */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
-            <div className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-              Deep Architectural Analysis
-            </div>
-            <div className="prose prose-invert prose-sm max-w-none text-slate-300 space-y-3 prose-headings:text-slate-100 prose-headings:font-semibold prose-code:text-blue-300 prose-code:bg-slate-950 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:border prose-code:border-slate-800">
-              <ReactMarkdown>{explanation.explanation}</ReactMarkdown>
-            </div>
-          </div>
+          {/* Deep Architectural Analysis (Markdown) */}
+          <Card variant="default">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-xs uppercase tracking-wider text-slate-300">
+                  Deep Architectural Analysis
+                </CardTitle>
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                  <Info size={12} />
+                  <span>Topic: {TOPICS.find((t) => t.id === selectedTopic)?.label}</span>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-2">
+              <div className="prose prose-invert prose-sm max-w-none text-slate-300 space-y-4 leading-relaxed [&>h1]:text-xl [&>h1]:font-bold [&>h1]:text-white [&>h1]:pb-2 [&>h1]:border-b [&>h1]:border-slate-800 [&>h2]:text-base [&>h2]:font-semibold [&>h2]:text-white [&>h3]:text-sm [&>h3]:font-semibold [&>h3]:text-slate-200 [&>p]:text-slate-300 [&>p]:leading-relaxed [&>ul]:list-disc [&>ul]:pl-5 [&>ol]:list-decimal [&>ol]:pl-5 [&>pre]:bg-slate-950 [&>pre]:p-4 [&>pre]:rounded-xl [&>pre]:border [&>pre]:border-slate-800 [&>pre]:overflow-x-auto [&>code]:bg-slate-800 [&>code]:px-1.5 [&>code]:py-0.5 [&>code]:rounded [&>code]:text-blue-300 [&>a]:text-blue-400 hover:[&>a]:underline">
+                <ReactMarkdown>{explanation.explanation}</ReactMarkdown>
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Grounded Evidence Citations */}
           {explanation.evidence.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="text-xs font-semibold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                  <FileCheck2 size={14} className="text-blue-400" />
-                  Grounded Evidence ({explanation.evidence.length} Facts Cited)
+            <Card variant="default">
+              <CardHeader className="pb-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <CardTitle className="text-xs uppercase tracking-wider text-slate-300">
+                    <FileCheck2 size={15} className="text-blue-400" />
+                    Grounded Evidence ({explanation.evidence.length} Verified Citations)
+                  </CardTitle>
+                  <span className="text-[11px] text-slate-500">
+                    Cross-referenced with Phase 2 manifests, trees, and metrics
+                  </span>
                 </div>
-                <span className="text-[11px] text-slate-400">
-                  Every claim is tied to verified repository data
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {explanation.evidence.map(getEvidenceBadge)}
-              </div>
-            </div>
+              </CardHeader>
+              <CardContent className="pt-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {explanation.evidence.map(getEvidenceCitationCard)}
+                </div>
+              </CardContent>
+            </Card>
           )}
         </div>
       )}

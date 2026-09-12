@@ -5,6 +5,9 @@ const TEST_PATTERNS = [
   /\.(test|spec)\.[a-zA-Z0-9]+$/,
   /(^|\/)__tests__\//,
   /(^|\/)test(s)?\//,
+  /(^|\/)fixture(s)?\//,
+  /(^|\/)__fixtures__\//,
+  /(^|\/)__mocks__\//,
   /_test\.go$/,
   /test_[a-zA-Z0-9_]+\.py$/,
   /[a-zA-Z0-9_]+_test\.py$/,
@@ -175,6 +178,12 @@ export function categorizePath(path: string): FileCategory {
 
 export function detectLandmark(path: string): LandmarkInfo | null {
   const normalized = path.replace(/\\/g, '/');
+
+  // Test, fixture, and mock files are never primary entrypoints or production landmarks
+  if (TEST_PATTERNS.some((p) => p.test(normalized))) {
+    return null;
+  }
+
   const parts = normalized.split('/');
   const fileName = parts[parts.length - 1];
   const lowerName = fileName.toLowerCase();

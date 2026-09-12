@@ -1,6 +1,15 @@
 import React from 'react';
 import type { ArchitectureOverview, LandmarkInfo } from '@archlens/shared';
-import { Layers, Box, Compass, FileCode2, ArrowRight } from 'lucide-react';
+import {
+  Layers,
+  Box,
+  Compass,
+  FileCode2,
+  ArrowRight,
+  CheckCircle2,
+} from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from './ui/Card.tsx';
+import { Badge } from './ui/Badge.tsx';
 
 interface ArchitectureViewProps {
   architecture: ArchitectureOverview;
@@ -14,136 +23,169 @@ export const ArchitectureView: React.FC<ArchitectureViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Pattern & Monorepo Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Monorepo Info */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-          <div className="flex items-center gap-2 text-slate-200 font-semibold mb-3">
-            <Box size={18} className="text-indigo-400" />
-            Repository Structure
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
+        <Card variant="default">
+          <CardHeader>
+            <CardTitle>
+              <Box size={16} className="text-indigo-400" />
+              Repository Structure
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-slate-400">Type:</span>
-              <span
-                className={`text-xs px-2 py-0.5 rounded font-medium ${
-                  architecture.isMonorepo
-                    ? 'bg-indigo-950 text-indigo-300 border border-indigo-800'
-                    : 'bg-slate-800 text-slate-300'
-                }`}
+              <Badge
+                variant={architecture.isMonorepo ? 'purple' : 'default'}
+                size="sm"
+                icon={<CheckCircle2 size={11} />}
               >
                 {architecture.isMonorepo ? 'Monorepo' : 'Standard Single Repository'}
-              </span>
+              </Badge>
+
               {architecture.monorepoTool && (
                 <span className="text-xs text-slate-400">
-                  via <strong className="text-slate-200">{architecture.monorepoTool}</strong>
+                  via{' '}
+                  <strong className="text-slate-200 font-semibold">
+                    {architecture.monorepoTool}
+                  </strong>
                 </span>
               )}
             </div>
 
-            {architecture.workspaces.length > 0 && (
-              <div className="mt-3">
-                <span className="text-xs text-slate-400 block mb-1">Declared Workspaces:</span>
-                <div className="flex flex-wrap gap-1.5">
+            {architecture.workspaces.length > 0 ? (
+              <div className="space-y-2 pt-2 border-t border-slate-800/80">
+                <div className="flex items-center justify-between text-xs text-slate-400">
+                  <span>Declared Workspaces ({architecture.workspaces.length})</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto pr-1">
                   {architecture.workspaces.map((ws, i) => (
                     <span
                       key={i}
-                      className="font-mono text-xs px-2 py-0.5 bg-slate-800 text-indigo-300 rounded border border-slate-700/60"
+                      className="font-mono text-xs px-2.5 py-1 bg-slate-950/80 text-indigo-300 rounded-md border border-slate-800"
                     >
                       {ws}
                     </span>
                   ))}
                 </div>
               </div>
+            ) : (
+              <p className="text-xs text-slate-500 italic pt-2 border-t border-slate-800/80">
+                No workspace packages declared in root manifest.
+              </p>
             )}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
 
         {/* Detected Patterns */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-          <div className="flex items-center gap-2 text-slate-200 font-semibold mb-3">
-            <Layers size={18} className="text-emerald-400" />
-            Detected Architectural Patterns
-          </div>
-
-          {architecture.detectedPatterns.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {architecture.detectedPatterns.map((pattern, i) => (
-                <span
-                  key={i}
-                  className="text-xs px-3 py-1 bg-emerald-950/60 text-emerald-300 border border-emerald-800/80 rounded-lg font-medium"
-                >
-                  {pattern}
-                </span>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-slate-400">No standard high-level patterns detected.</p>
-          )}
-        </div>
+        <Card variant="default">
+          <CardHeader>
+            <CardTitle>
+              <Layers size={16} className="text-emerald-400" />
+              Detected Architectural Patterns
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {architecture.detectedPatterns.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {architecture.detectedPatterns.map((pattern, i) => (
+                  <Badge key={i} variant="success" size="sm">
+                    {pattern}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <div className="p-4 rounded-lg bg-slate-950/50 border border-slate-800/60 text-xs text-slate-400">
+                No standard multi-layer or framework patterns detected from repository manifests.
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Primary Entrypoints & Key Landmarks */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Entrypoints */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-          <div className="flex items-center gap-2 text-slate-200 font-semibold mb-3">
-            <FileCode2 size={18} className="text-blue-400" />
-            Primary Entrypoints
-          </div>
-
-          {architecture.primaryEntrypoints.length > 0 ? (
-            <ul className="divide-y divide-slate-800">
-              {architecture.primaryEntrypoints.map((entry, i) => (
-                <li key={i} className="py-2 flex items-center justify-between text-xs">
-                  <span className="font-mono text-slate-200">{entry}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-xs text-slate-400">No canonical entrypoint detected.</p>
-          )}
-        </div>
+        <Card variant="default">
+          <CardHeader>
+            <CardTitle>
+              <FileCode2 size={16} className="text-blue-400" />
+              Primary Runtime Entrypoints
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {architecture.primaryEntrypoints.length > 0 ? (
+              <ul className="divide-y divide-slate-800/80">
+                {architecture.primaryEntrypoints.map((entry, i) => (
+                  <li
+                    key={i}
+                    className="py-2.5 first:pt-0 last:pb-0 flex items-center justify-between text-xs"
+                  >
+                    <span className="font-mono text-slate-200 bg-slate-950/80 px-2 py-1 rounded border border-slate-800">
+                      {entry}
+                    </span>
+                    <Badge variant="primary" size="xs">
+                      Entrypoint
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-slate-500 italic">No canonical entrypoint detected.</p>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Key Landmarks */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-          <div className="flex items-center gap-2 text-slate-200 font-semibold mb-3">
-            <Compass size={18} className="text-amber-400" />
-            Key Repository Landmarks
-          </div>
-
-          {architecture.keyLandmarks.length > 0 ? (
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-              {architecture.keyLandmarks.map((landmark, i) => (
-                <button
-                  key={i}
-                  onClick={() => onSelectLandmark && onSelectLandmark(landmark)}
-                  className="w-full text-left p-2.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 hover:border-slate-600 transition flex items-center justify-between group"
-                >
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs font-semibold text-slate-200 group-hover:text-blue-400">
-                        {landmark.path}
-                      </span>
-                      <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-900 text-slate-400">
-                        {landmark.type}
-                      </span>
-                    </div>
-                    {landmark.description && (
-                      <p className="text-[11px] text-slate-400 mt-0.5">{landmark.description}</p>
-                    )}
-                  </div>
-                  <ArrowRight
-                    size={14}
-                    className="text-slate-500 group-hover:text-blue-400 group-hover:translate-x-0.5 transition"
-                  />
-                </button>
-              ))}
+        <Card variant="default">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>
+                <Compass size={16} className="text-amber-400" />
+                Key Repository Landmarks
+              </CardTitle>
+              <span className="text-[11px] text-slate-500">
+                {architecture.keyLandmarks.length} identified
+              </span>
             </div>
-          ) : (
-            <p className="text-xs text-slate-400">No key landmarks identified.</p>
-          )}
-        </div>
+          </CardHeader>
+          <CardContent>
+            {architecture.keyLandmarks.length > 0 ? (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {architecture.keyLandmarks.map((landmark, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => onSelectLandmark && onSelectLandmark(landmark)}
+                    className="w-full text-left p-3 rounded-lg bg-slate-950/60 hover:bg-slate-800/80 border border-slate-800 hover:border-slate-700 transition flex items-center justify-between group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-semibold text-slate-200 group-hover:text-blue-400 transition-colors">
+                          {landmark.path}
+                        </span>
+                        <Badge variant="neutral" size="xs" mono>
+                          {landmark.type}
+                        </Badge>
+                      </div>
+                      {landmark.description && (
+                        <p className="text-[11px] text-slate-400 line-clamp-1">
+                          {landmark.description}
+                        </p>
+                      )}
+                    </div>
+                    <ArrowRight
+                      size={14}
+                      className="text-slate-600 group-hover:text-blue-400 group-hover:translate-x-0.5 transition shrink-0 ml-2"
+                    />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500 italic">No key landmarks identified.</p>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

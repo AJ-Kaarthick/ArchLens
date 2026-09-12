@@ -1,6 +1,18 @@
 import React, { useState, useMemo } from 'react';
 import type { FileTreeItem } from '@archlens/shared';
-import { Folder, FolderOpen, FileText, Search, Star } from 'lucide-react';
+import {
+  Folder,
+  FolderOpen,
+  FileText,
+  Search,
+  Star,
+  ChevronRight,
+  ChevronDown,
+  X,
+  FileCode,
+} from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from './ui/Card.tsx';
+import { Badge } from './ui/Badge.tsx';
 
 interface FileTreeExplorerProps {
   tree: FileTreeItem[];
@@ -40,23 +52,29 @@ function buildTreeStructure(items: FileTreeItem[]): TreeNode {
   return root;
 }
 
-const CATEGORY_COLORS: Record<string, string> = {
-  source: 'text-blue-400 bg-blue-950/60 border-blue-900/60',
-  test: 'text-amber-400 bg-amber-950/60 border-amber-900/60',
-  config: 'text-purple-400 bg-purple-950/60 border-purple-900/60',
-  doc: 'text-emerald-400 bg-emerald-950/60 border-emerald-900/60',
-  asset: 'text-pink-400 bg-pink-950/60 border-pink-900/60',
-  ci: 'text-cyan-400 bg-cyan-950/60 border-cyan-900/60',
-  other: 'text-slate-400 bg-slate-800 border-slate-700',
+const CATEGORY_BADGE_VARIANTS: Record<string, 'primary' | 'warning' | 'purple' | 'success' | 'danger' | 'cyan' | 'default'> = {
+  source: 'primary',
+  test: 'warning',
+  config: 'purple',
+  doc: 'success',
+  asset: 'danger',
+  ci: 'cyan',
+  other: 'default',
 };
 
 interface TreeNodeItemProps {
   node: TreeNode;
   level: number;
+  selectedPath?: string;
   onSelectFile?: (_file: FileTreeItem) => void;
 }
 
-const TreeNodeItem: React.FC<TreeNodeItemProps> = ({ node, level, onSelectFile }) => {
+const TreeNodeItem: React.FC<TreeNodeItemProps> = ({
+  node,
+  level,
+  selectedPath,
+  onSelectFile,
+}) => {
   const [isOpen, setIsOpen] = useState(level < 1);
   const isDirectory = Object.keys(node.children).length > 0 || !node.item;
 
@@ -70,27 +88,34 @@ const TreeNodeItem: React.FC<TreeNodeItemProps> = ({ node, level, onSelectFile }
     });
 
     return (
-      <div>
-        <div
+      <div role="treeitem" aria-expanded={isOpen}>
+        <button
+          type="button"
           onClick={() => setIsOpen(!isOpen)}
-          style={{ paddingLeft: `${level * 16 + 8}px` }}
-          className="flex items-center gap-2 py-1.5 px-2 hover:bg-slate-800/80 rounded cursor-pointer text-xs text-slate-300 transition select-none"
+          style={{ paddingLeft: `${level * 14 + 6}px` }}
+          className="w-full flex items-center gap-1.5 py-1 px-2 hover:bg-slate-800/70 rounded-md cursor-pointer text-xs text-slate-300 hover:text-white transition select-none text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
         >
+          <span className="text-slate-500 hover:text-slate-300 transition">
+            {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </span>
           {isOpen ? (
             <FolderOpen size={14} className="text-amber-400 shrink-0" />
           ) : (
             <Folder size={14} className="text-amber-400/80 shrink-0" />
           )}
-          <span className="font-mono font-medium text-slate-200">{node.name}</span>
-        </div>
+          <span className="font-mono font-medium text-slate-200 text-xs truncate">
+            {node.name}
+          </span>
+        </button>
 
         {isOpen && (
-          <div>
+          <div role="group">
             {childEntries.map(([childName, childNode]) => (
               <TreeNodeItem
                 key={childName}
                 node={childNode}
                 level={level + 1}
+                selectedPath={selectedPath}
                 onSelectFile={onSelectFile}
               />
             ))}
@@ -102,40 +127,59 @@ const TreeNodeItem: React.FC<TreeNodeItemProps> = ({ node, level, onSelectFile }
 
   // File Item
   const item = node.item!;
-  const catColor = CATEGORY_COLORS[item.category] || CATEGORY_COLORS.other;
+  const isSelected = selectedPath === item.path;
+  const badgeVariant = CATEGORY_BADGE_VARIANTS[item.category] || 'default';
 
   return (
-    <div
-      onClick={() => onSelectFile && onSelectFile(item)}
-      style={{ paddingLeft: `${level * 16 + 8}px` }}
-      className="flex items-center justify-between py-1 px-2 hover:bg-slate-800/90 rounded cursor-pointer text-xs text-slate-300 transition group"
-    >
-      <div className="flex items-center gap-2 truncate">
-        <FileText size={13} className="text-slate-400 shrink-0" />
-        <span className="font-mono text-slate-300 group-hover:text-blue-400 truncate">
-          {node.name}
-        </span>
-        {item.isLandmark && (
-          <Star size={11} className="text-yellow-400 shrink-0 fill-yellow-400/30" />
-        )}
-      </div>
+    <div role="treeitem">
+      <button
+        type="button"
+        onClick={() => onSelectFile && onSelectFile(item)}
+        style={{ paddingLeft: `${level * 14 + 20}px` }}
+        className={`w-full flex items-center justify-between py-1 px-2 rounded-md cursor-pointer text-xs transition group text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 ${
+          isSelected
+            ? 'bg-blue-600/20 text-white font-medium border border-blue-500/30'
+            : 'hover:bg-slate-800/80 text-slate-300 hover:text-white'
+        }`}
+      >
+        <div className="flex items-center gap-2 truncate pr-2">
+          <FileText
+            size={13}
+            className={`shrink-0 ${isSelected ? 'text-blue-400' : 'text-slate-500 group-hover:text-slate-400'}`}
+          />
+          <span
+            className={`font-mono truncate ${
+              isSelected ? 'text-blue-300' : 'group-hover:text-blue-400 transition-colors'
+            }`}
+          >
+            {node.name}
+          </span>
+          {item.isLandmark && (
+            <span title="Key Repository Landmark" className="inline-flex">
+              <Star
+                size={11}
+                className="text-amber-400 shrink-0 fill-amber-400/30"
+              />
+            </span>
+          )}
+        </div>
 
-      <div className="flex items-center gap-2 shrink-0 ml-2">
-        <span
-          className={`text-[10px] uppercase font-mono px-1.5 py-0.2 rounded border ${catColor}`}
-        >
-          {item.category}
-        </span>
-        <span className="font-mono text-[11px] text-slate-400">
-          {(item.size / 1024).toFixed(1)} KB
-        </span>
-      </div>
+        <div className="flex items-center gap-2 shrink-0 ml-auto font-mono text-[10px]">
+          <Badge variant={badgeVariant} size="xs" mono>
+            {item.category}
+          </Badge>
+          <span className="text-slate-500 text-[11px] w-14 text-right">
+            {(item.size / 1024).toFixed(1)} KB
+          </span>
+        </div>
+      </button>
     </div>
   );
 };
 
 export const FileTreeExplorer: React.FC<FileTreeExplorerProps> = ({ tree, onSelectFile }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedPath, setSelectedPath] = useState<string | undefined>();
 
   const filteredItems = useMemo(() => {
     if (!searchTerm.trim()) return tree;
@@ -147,35 +191,73 @@ export const FileTreeExplorer: React.FC<FileTreeExplorerProps> = ({ tree, onSele
 
   const treeRoot = useMemo(() => buildTreeStructure(filteredItems), [filteredItems]);
 
+  const handleSelectFile = (file: FileTreeItem) => {
+    setSelectedPath(file.path);
+    onSelectFile?.(file);
+  };
+
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-800">
-        <div className="flex items-center gap-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-            Repository Tree Explorer
-          </h3>
-          <span className="text-xs text-slate-400">({filteredItems.length} files)</span>
-        </div>
+    <Card variant="default">
+      <CardHeader className="pb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <CardTitle>
+              <FileCode size={16} className="text-blue-400" />
+              Repository File Tree
+            </CardTitle>
+            <span className="text-xs text-slate-500">
+              ({filteredItems.length} of {tree.length} files)
+            </span>
+          </div>
 
-        {/* Search */}
-        <div className="relative w-full sm:w-64">
-          <Search size={14} className="absolute left-2.5 top-2.5 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Filter files..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 bg-slate-800 border border-slate-700/80 rounded-lg text-xs text-white placeholder-slate-400 focus:outline-none focus:border-blue-500"
-          />
+          {/* Search Filter Input */}
+          <div className="relative w-full sm:w-72">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              placeholder="Filter file path..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              aria-label="Filter repository files"
+              className="w-full pl-8 pr-7 py-1.5 bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 transition"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-0.5 rounded"
+                title="Clear filter"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      </CardHeader>
 
-      {/* Tree View Container */}
-      <div className="max-h-[500px] overflow-y-auto pr-2 border border-slate-800/80 rounded-lg p-2 bg-slate-950/50">
-        {Object.entries(treeRoot.children).map(([name, node]) => (
-          <TreeNodeItem key={name} node={node} level={0} onSelectFile={onSelectFile} />
-        ))}
-      </div>
-    </div>
+      <CardContent className="pt-3">
+        {filteredItems.length === 0 ? (
+          <div className="p-8 text-center text-xs text-slate-400 bg-slate-950/60 rounded-xl border border-slate-800/80">
+            No files match &ldquo;{searchTerm}&rdquo;. Try a different keyword or path segment.
+          </div>
+        ) : (
+          <div
+            role="tree"
+            aria-label="File tree navigation"
+            className="max-h-[550px] overflow-y-auto pr-1 border border-slate-800/80 rounded-xl p-2 bg-slate-950/80"
+          >
+            {Object.entries(treeRoot.children).map(([name, node]) => (
+              <TreeNodeItem
+                key={name}
+                node={node}
+                level={0}
+                selectedPath={selectedPath}
+                onSelectFile={handleSelectFile}
+              />
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 };

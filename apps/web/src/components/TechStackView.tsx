@@ -1,6 +1,8 @@
 import React from 'react';
 import type { TechStackDetection, TechCategory } from '@archlens/shared';
 import { Cpu, CheckCircle, HelpCircle } from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from './ui/Card.tsx';
+import { Badge } from './ui/Badge.tsx';
 
 interface TechStackViewProps {
   techStack: TechStackDetection[];
@@ -29,65 +31,74 @@ export const TechStackView: React.FC<TechStackViewProps> = ({ techStack }) => {
 
   if (techStack.length === 0) {
     return (
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center text-slate-400 text-sm">
-        No specific tech stack dependencies or tools detected.
-      </div>
+      <Card variant="default">
+        <CardContent className="p-12 text-center text-slate-400 text-xs">
+          No third-party framework manifests or package dependencies detected.
+        </CardContent>
+      </Card>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {categories.map((cat) => (
-          <div
-            key={cat}
-            className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col"
-          >
-            <div className="flex items-center gap-2 mb-3 pb-2 border-b border-slate-800">
-              <Cpu size={16} className="text-cyan-400" />
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-                {CATEGORY_LABELS[cat] || cat}
-              </h3>
-            </div>
+          <Card key={cat} variant="default" className="flex flex-col">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-xs uppercase tracking-wider text-slate-300">
+                  <Cpu size={15} className="text-cyan-400" />
+                  {CATEGORY_LABELS[cat] || cat}
+                </CardTitle>
+                <span className="text-[11px] font-mono text-slate-500">
+                  {grouped[cat].length}
+                </span>
+              </div>
+            </CardHeader>
 
-            <div className="space-y-2.5 flex-1">
+            <CardContent className="space-y-2.5 flex-1 pt-3">
               {grouped[cat].map((item, idx) => (
                 <div
                   key={idx}
-                  className="bg-slate-800/60 border border-slate-700/60 rounded-lg p-3 hover:border-slate-600 transition"
+                  className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 hover:border-slate-700 transition space-y-2"
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-white">{item.name}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-white truncate" title={item.name}>
+                      {item.name}
+                    </span>
                     {item.version && (
-                      <span className="font-mono text-xs px-2 py-0.5 bg-slate-900 text-cyan-300 rounded border border-slate-700">
+                      <Badge variant="cyan" size="xs" mono>
                         v{item.version}
-                      </span>
+                      </Badge>
                     )}
                   </div>
 
-                  <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
-                    <span className="truncate max-w-[200px]" title={item.evidence}>
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 pt-1 border-t border-slate-900">
+                    <span
+                      className="font-mono text-[10px] text-slate-500 truncate max-w-[180px]"
+                      title={item.evidence}
+                    >
                       {item.evidence}
                     </span>
-                    <span
-                      className={`inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded ${
-                        item.confidence === 'high'
-                          ? 'bg-emerald-950 text-emerald-400'
-                          : 'bg-amber-950 text-amber-400'
-                      }`}
+
+                    <Badge
+                      variant={item.confidence === 'high' ? 'success' : 'warning'}
+                      size="xs"
+                      icon={
+                        item.confidence === 'high' ? (
+                          <CheckCircle size={10} />
+                        ) : (
+                          <HelpCircle size={10} />
+                        )
+                      }
                     >
-                      {item.confidence === 'high' ? (
-                        <CheckCircle size={10} />
-                      ) : (
-                        <HelpCircle size={10} />
-                      )}
                       {item.confidence}
-                    </span>
+                    </Badge>
                   </div>
                 </div>
               ))}
-            </div>
-          </div>
+            </CardContent>
+          </Card>
         ))}
       </div>
     </div>
