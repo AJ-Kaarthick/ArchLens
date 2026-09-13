@@ -184,3 +184,89 @@ pnpm -r run typecheck
 # Run ESLint across packages
 pnpm -r run lint
 ```
+
+---
+
+## 9. Local Production Simulation & Containerization
+
+ArchLens provides Docker images and a Docker Compose configuration for local production simulation and deployment verification.
+
+> [!NOTE]
+> The Docker Compose configuration (`docker-compose.yml`) is provided strictly for **local full-stack simulation, developer testing, and release validation**. It is not a claim of production-grade cloud orchestration.
+
+### Services Architecture
+
+| Service | Image | Base Image | Non-Root User | Internal Port | Host Port | Purpose |
+|---|---|---|---|---|---|---|
+| **`postgres`** | `postgres:16-alpine` | Alpine | `postgres` (UID 70) | `5432` | `5433` (configurable) | Persistent database with named volume `archlens_pgdata`. |
+| **`migrator`** | `archlens-api` | `node:20-alpine` | `node` (UID 1000) | N/A | N/A | One-shot migration runner. Runs `node apps/api/dist/db/migrate.js` to completion before API boots. |
+| **`api`** | `archlens-api` | `node:20-alpine` | `node` (UID 1000) | `3000` | `3000` | Fastify backend with structured logging, rate limiting, and health probes. |
+| **`web`** | `archlens-web` | `nginx:alpine` | `nginx` (UID 101) | `8080` | `8080` | Unprivileged Nginx serving compiled Vite static assets with SPA fallback and `/api/` reverse proxy. |
+
+### Running the Production Simulation
+
+```bash
+# 1. Validate Docker Compose configuration
+docker compose config
+
+# 2. Build production images
+docker compose build
+
+# 3. Launch stack in background
+docker compose up -d
+
+# 4. Check services status & health
+docker compose ps
+
+# 5. View logs
+docker compose logs -f api
+docker compose logs -f migrator
+
+# 6. Stop simulation stack (preserves named volume)
+docker compose down
+```
+
+### Verifying Endpoints
+
+```bash
+# Verify API process liveness probe
+curl http://localhost:3000/health/liveness
+
+# Verify API database readiness probe
+curl http://localhost:3000/health/readiness
+
+# Verify Web frontend home page
+curl -I http://localhost:8080/
+
+# Verify SPA history fallback for direct deep links
+curl -I http://localhost:8080/repos/facebook/react?tab=execution
+
+# Verify Nginx reverse proxy to API
+curl http://localhost:8080/api/repositories/recent
+```
+
+### Continuous Integration (GitHub Actions)
+
+CI is configured under `.github/workflows/ci.yml` and triggers on pushes and pull requests to `main`:
+
+1. **`validate` job**:
+   - Boots a PostgreSQL 16 Alpine service container.
+   - Installs pnpm with frozen lockfile.
+   - Executes `pnpm -r run lint`.
+   - Executes `pnpm -r run typecheck`.
+   - Executes `pnpm -r run test` with real PostgreSQL connectivity.
+   - Executes `pnpm -r run build`.
+   - Checks git diff and formatting (`git diff --check`).
+2. **`docker` job**:
+   - Validates `apps/api/Dockerfile` multi-stage build.
+   - Validates `apps/web/Dockerfile` multi-stage build.
+   - Validates `docker compose config`.
+
+### Architectural Boundaries & Future Work
+
+- **Restricted Host-Process Sandbox**: The execution subsystem is a restricted host-process model (stripped environment, in-process memory bounds, path confinement, process-group `SIGKILL` termination), **not** a kernel-level microVM or container isolation boundary. In production configurations, `ENABLE_SANDBOX` defaults to `false`.
+- **In-Memory Rate Limiting**: Rate limits are enforced per-process using `@fastify/rate-limit`. Horizontal scaling across multiple container instances would require ingress/gateway rate limiting or a shared store.
+- **Intentionally Deferred Capabilities**:
+  - Authentication and multi-tenant authorization (planned for post-Phase 7).
+  - Distributed job queues (Redis/BullMQ) — current bounded synchronous workloads do not justify premature queue infrastructure.
+  - Kubernetes manifests or distributed cloud orchestration.

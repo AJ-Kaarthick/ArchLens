@@ -1,0 +1,110 @@
+# ==============================================================================
+# ArchLens - Local Production Simulation
+#
+# NOTE: This Docker Compose configuration is provided strictly for local
+# end-to-end production simulation and developer workflow verification.
+# It is not a prescription or claim of production-grade cloud orchestration.
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # PostgreSQL Database with persistent named volume
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: archlens-postgres-sim
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-archlens}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - archlens_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-archlens}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+  # ----------------------------------------------------------------------------
+  # Database Migration Runner (One-shot task, explicitly executes before API)
+  # Uses the compiled Drizzle migration runner without embedding startup DDL.
+  # ----------------------------------------------------------------------------
+  migrator:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: archlens-migrator-sim
+    command: ["node", "apps/api/dist/db/migrate.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-archlens}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  # ----------------------------------------------------------------------------
+  # ArchLens API Backend Service
+  # Runs as non-root user (node, UID 1000) with disabled sandbox by default.
+  # ----------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: archlens-api-sim
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-archlens}
+      # Sandbox execution disabled by default for safe production simulation
+      ENABLE_SANDBOX: ${ENABLE_SANDBOX:-false}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
+      RATE_LIMIT_ANALYZE_MAX: ${RATE_LIMIT_ANALYZE_MAX:-10}
+      RATE_LIMIT_EXECUTE_MAX: ${RATE_LIMIT_EXECUTE_MAX:-10}
+      RATE_LIMIT_EXPLAIN_MAX: ${RATE_LIMIT_EXPLAIN_MAX:-20}
+      RATE_LIMIT_SEARCH_MAX: ${RATE_LIMIT_SEARCH_MAX:-30}
+      RATE_LIMIT_GENERAL_MAX: ${RATE_LIMIT_GENERAL_MAX:-120}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+
+  # ----------------------------------------------------------------------------
+  # ArchLens Web Frontend Service (Unprivileged Nginx)
+  # Serves compiled Vite SPA with HTML5 history routing and /api/ reverse proxy.
+  # ----------------------------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: archlens-web-sim
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  archlens_pgdata:
+    name: archlens_pgdata

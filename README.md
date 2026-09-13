@@ -235,6 +235,35 @@ Visit **`http://localhost:5173`** in your browser.
 
 ---
 
+## Local Production Simulation (Docker Compose)
+
+ArchLens includes a complete local production simulation stack orchestrating PostgreSQL, one-shot migrations, the Fastify API, and the unprivileged Nginx Web client:
+
+```bash
+# 1. Validate Docker Compose configuration
+docker compose config
+
+# 2. Build production container images
+docker compose build
+
+# 3. Start services in detached mode
+docker compose up -d
+
+# 4. Check services status & health
+docker compose ps
+
+# 5. Access the Web Explorer (SPA with history routing fallback)
+open http://localhost:8080
+
+# 6. Stop simulation stack (preserves named volume archlens_pgdata)
+docker compose down
+```
+
+> [!NOTE]
+> `docker-compose.yml` is designed for **local production simulation and verification**, not cloud orchestration. Database migrations run via a dedicated one-shot container (`migrator`) before the API starts. Sandbox execution defaults to disabled (`ENABLE_SANDBOX=false`).
+
+---
+
 ## Verification & Code Quality
 
 Run tests, typechecks, and code styling across all workspace packages:
