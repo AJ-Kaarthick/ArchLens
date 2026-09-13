@@ -120,3 +120,18 @@ export function validateArgs(args?: unknown[]): string[] {
   }
   return clean;
 }
+
+/**
+ * Determines whether sandboxed execution is enabled.
+ * Default is disabled (safe) in production environments unless ENABLE_SANDBOX=true.
+ * In development/test environments, it defaults to enabled unless explicitly set to false/0.
+ */
+export function isSandboxEnabled(
+  env: Record<string, string | undefined> = process.env
+): boolean {
+  const val = env.ENABLE_SANDBOX?.toLowerCase()?.trim();
+  if (val !== undefined) {
+    return val === 'true' || val === '1';
+  }
+  return env.NODE_ENV !== 'production';
+}

@@ -6,39 +6,65 @@ import {
   GitHubNotFoundError,
   GitHubTreeTooLargeError,
 } from '../services/github.service.js';
+import { getRateLimitConfig, type RateLimitConfig } from '../config/rate-limit.js';
 
-export function createRepositoryRoutes(customService?: RepositoryService): FastifyPluginAsync {
+export function createRepositoryRoutes(
+  customService?: RepositoryService,
+  customRateLimitConfig?: RateLimitConfig
+): FastifyPluginAsync {
   const service = customService || repositoryService;
+  const rateLimits = customRateLimitConfig || getRateLimitConfig();
 
   return async (fastify) => {
     // 1. POST /api/analyze
-    fastify.post('/api/analyze', async (request, reply) => {
-      let owner: string;
-      let repo: string;
+    fastify.post(
+      '/api/analyze',
+      {
+        config: {
+          rateLimit: {
+            max: rateLimits.analyzeMax,
+            timeWindow: rateLimits.timeWindowMs,
+          },
+        },
+      },
+      async (request, reply) => {
+        let owner: string;
+        let repo: string;
 
-      try {
-        const parsed = RepoInputSchema.parse(request.body);
-        owner = parsed.owner;
-        repo = parsed.repo;
-      } catch (err: unknown) {
-        const message =
-          err && typeof err === 'object' && 'issues' in err && Array.isArray((err as any).issues)
-            ? (err as any).issues[0]?.message
-            : "Invalid request payload. Expected 'url' or 'owner' and 'repo'.";
+        try {
+          const parsed = RepoInputSchema.parse(request.body);
+          owner = parsed.owner;
+          repo = parsed.repo;
+        } catch (err: unknown) {
+          const message =
+            err && typeof err === 'object' && 'issues' in err && Array.isArray((err as any).issues)
+              ? (err as any).issues[0]?.message
+              : "Invalid request payload. Expected 'url' or 'owner' and 'repo'.";
 
-        const errorResponse: ApiError = {
-          error: 'ValidationError',
-          message,
-          isRateLimit: false,
-          suggestedAction:
-            "Provide a valid repository format like 'owner/repo' or 'https://github.com/owner/repo'",
-        };
-        return reply.status(400).send(errorResponse);
-      }
+          const errorResponse: ApiError = {
+            error: 'ValidationError',
+            message,
+            isRateLimit: false,
+            suggestedAction:
+              "Provide a valid repository format like 'owner/repo' or 'https://github.com/owner/repo'",
+          };
+          return reply.status(400).send(errorResponse);
+        }
 
-      try {
-        const result = await service.analyze(owner, repo);
-        return reply.status(200).send(result);
+        const startTime = Date.now();
+        try {
+          const result = await service.analyze(owner, repo);
+          request.log.info(
+            {
+              event: 'analysis_completed',
+              owner,
+              repo,
+              durationMs: Date.now() - startTime,
+              totalFiles: result.metrics?.totalFiles,
+            },
+            'Repository analysis completed'
+          );
+          return reply.status(200).send(result);
       } catch (err: unknown) {
         if (err instanceof GitHubRateLimitError) {
           const errorResponse: ApiError = {

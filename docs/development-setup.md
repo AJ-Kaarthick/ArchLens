@@ -79,24 +79,35 @@ ArchLens automatically loads `apps/api/.env` at backend startup. In production o
 
 The backend accepts configuration via environment variables:
 
-| Variable                 | Description                                                                                                 | Default                                                |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `DATABASE_URL`           | PostgreSQL connection string                                                                                | `postgres://postgres:postgres@localhost:5432/archlens` |
-| `DB_POOL_MAX`            | Maximum PostgreSQL connection pool size                                                                     | `10`                                                   |
-| `DB_IDLE_TIMEOUT`        | Idle connection timeout in seconds                                                                          | `20`                                                   |
-| `DB_CONNECT_TIMEOUT`     | Database connection timeout in seconds                                                                      | `10`                                                   |
-| `DB_SSL`                 | Optional SSL mode (`require` or `prefer`) for cloud databases                                               | _None_                                                 |
-| `GITHUB_TOKEN`           | Optional GitHub Personal Access Token (server-side only) to raise REST rate limits from 60 to 5,000 req/hr  | _None_                                                 |
-| `GEMINI_API_KEY`         | Optional Google Gemini API key (server-side only). When omitted, ArchLens uses Mock providers gracefully    | _None_                                                 |
-| `AI_PROVIDER`            | AI explanation provider override (`gemini` or `mock`). Defaults to `gemini` if API key present, else `mock` | `gemini` (if key set) / `mock`                         |
-| `GEMINI_MODEL`           | Gemini model name                                                                                           | `gemini-2.0-flash`                                     |
-| `EMBEDDING_PROVIDER`     | Embedding provider override (`gemini` or `mock`). Defaults to `gemini` if API key present, else `mock`      | `gemini` (if key set) / `mock`                         |
-| `GEMINI_EMBEDDING_MODEL` | Gemini text embedding model name                                                                            | `text-embedding-004`                                   |
-| `PORT`                   | API server listen port                                                                                      | `3000`                                                 |
-| `HOST`                   | API server host interface                                                                                   | `0.0.0.0`                                              |
+| Variable                    | Description                                                                                                 | Default                                                |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `DATABASE_URL`              | PostgreSQL connection string                                                                                | `postgres://postgres:postgres@localhost:5432/archlens` |
+| `DB_POOL_MAX`               | Maximum PostgreSQL connection pool size                                                                     | `10`                                                   |
+| `DB_IDLE_TIMEOUT`           | Idle connection timeout in seconds                                                                          | `20`                                                   |
+| `DB_CONNECT_TIMEOUT`        | Database connection timeout in seconds                                                                      | `10`                                                   |
+| `DB_SSL`                    | Optional SSL mode (`require` or `prefer`) for cloud databases                                               | _None_                                                 |
+| `GITHUB_TOKEN`              | Optional GitHub Personal Access Token (server-side only) to raise REST rate limits from 60 to 5,000 req/hr  | _None_                                                 |
+| `GEMINI_API_KEY`            | Optional Google Gemini API key (server-side only). When omitted, ArchLens uses Mock providers gracefully    | _None_                                                 |
+| `AI_PROVIDER`               | AI explanation provider override (`gemini` or `mock`). Defaults to `gemini` if API key present, else `mock` | `gemini` (if key set) / `mock`                         |
+| `GEMINI_MODEL`              | Gemini model name                                                                                           | `gemini-2.0-flash`                                     |
+| `EMBEDDING_PROVIDER`        | Embedding provider override (`gemini` or `mock`). Defaults to `gemini` if API key present, else `mock`      | `gemini` (if key set) / `mock`                         |
+| `GEMINI_EMBEDDING_MODEL`    | Gemini text embedding model name                                                                            | `text-embedding-004`                                   |
+| `PORT`                      | API server listen port                                                                                      | `3000`                                                 |
+| `HOST`                      | API server host interface                                                                                   | `0.0.0.0`                                              |
+| `LOG_LEVEL`                 | Structured Pino log level (`info`, `debug`, `warn`, `error`, `silent`)                                      | `info`                                                 |
+| `RATE_LIMIT_TIME_WINDOW_MS` | Rate limiting rolling window in milliseconds                                                                | `60000` (1 min)                                        |
+| `RATE_LIMIT_ANALYZE_MAX`    | In-memory maximum `POST /api/analyze` calls per window                                                      | `10`                                                   |
+| `RATE_LIMIT_EXECUTE_MAX`    | In-memory maximum `POST /api/repositories/:owner/:repo/execute` calls per window                             | `10`                                                   |
+| `RATE_LIMIT_EXPLAIN_MAX`    | In-memory maximum `POST /api/repositories/:owner/:repo/explain` calls per window                             | `20`                                                   |
+| `RATE_LIMIT_SEARCH_MAX`     | In-memory maximum `POST /api/repositories/:owner/:repo/search` calls per window                              | `30`                                                   |
+| `RATE_LIMIT_GENERAL_MAX`    | In-memory maximum general endpoint calls per window                                                         | `120`                                                  |
+| `ENABLE_SANDBOX`            | Deployment toggle for execution (`true` or `false`). Defaults to `false` in production env                  | `true` in dev/test, `false` in prod                    |
 
 > [!NOTE]
 > `GITHUB_TOKEN` and `GEMINI_API_KEY` are strictly consumed server-side in `apps/api`. They are never exposed to `apps/web` or `@archlens/shared`. If `GEMINI_API_KEY` is not provided, ArchLens runs 100% offline using `MockAIProvider` and `MockEmbeddingProvider`.
+
+> [!WARNING]
+> **Sandbox Model Disclosure:** The sandbox execution subsystem is a **restricted host-process runner** with a stripped environment, in-process V8 heap limits, path traversal defenses, and process-group termination (`SIGKILL`). It is **NOT** a kernel-level microVM or container isolation sandbox. In production environments, `ENABLE_SANDBOX` defaults to `false` in `.env.example`.
 
 If using the default local Docker container above, `DATABASE_URL` does not need to be set explicitly.
 
@@ -115,7 +126,21 @@ pnpm --filter @archlens/api db:migrate
 
 ---
 
-## 5. Build Workspace Packages
+## 5. Health Probes & Graceful Shutdown
+
+The API server exposes standardized health endpoints for orchestration and monitoring:
+
+- **Liveness Probe (`GET /health/liveness`)**: Returns HTTP 200 `{ status: "ok", check: "liveness", version: "0.1.0", uptime: ... }`. Verifies that the Node process is running. Does not touch the database.
+- **Readiness Probe (`GET /health/readiness`)**: Executes `SELECT 1` via `checkDbConnection()`. Returns HTTP 200 `{ status: "ready", check: "readiness", database: "connected", version: "0.1.0" }` when reachable, or HTTP 503 `{ status: "unavailable", database: "disconnected" }` when unavailable (without exposing internal connection errors).
+- **Legacy Health Probe (`GET /health`)**: Returns HTTP 200 `{ status: "ok", version: "0.1.0" }`.
+
+Rate limiting is disabled on all health probes.
+
+**Graceful Termination**: On `SIGTERM` or `SIGINT`, the server gracefully stops accepting incoming requests, cleans up ephemeral preview workspaces, terminates active sandbox child processes, closes the PostgreSQL connection pool, and exits within a bounded 10-second grace period.
+
+---
+
+## 6. Build Workspace Packages
 
 Build `@archlens/shared`, `@archlens/api`, and `@archlens/web`:
 
@@ -125,7 +150,7 @@ pnpm -r run build
 
 ---
 
-## 6. Start Development Servers
+## 7. Start Development Servers
 
 Start all workspaces concurrently:
 
@@ -147,7 +172,7 @@ Open `http://localhost:5173` to access the ArchLens Web Explorer.
 
 ---
 
-## 7. Code Quality & Testing
+## 8. Code Quality & Testing
 
 ```bash
 # Run Vitest test suite (offline fixtures + integration tests)
@@ -158,7 +183,4 @@ pnpm -r run typecheck
 
 # Run ESLint across packages
 pnpm -r run lint
-
-# Check and format code with Prettier
-pnpm run format
 ```

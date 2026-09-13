@@ -86,3 +86,15 @@ export async function hasPgVectorSupport(): Promise<boolean> {
   }
   return _hasPgVector;
 }
+
+/**
+ * Gracefully closes the database connection pool.
+ * Used during process termination / graceful shutdown.
+ */
+export async function closeDbConnection(timeoutSeconds: number = 5): Promise<void> {
+  try {
+    await sql.end({ timeout: timeoutSeconds });
+  } catch {
+    // Ignore errors during closing if already closed
+  }
+}

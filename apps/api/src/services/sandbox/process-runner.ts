@@ -6,6 +6,8 @@ import { SAFE_ENV, SANDBOX_LIMITS, clampTimeout, isPathSafe } from './policy.js'
 import { OutputCollector } from './output-collector.js';
 
 export class ProcessSandboxRunner implements ISandboxRunner {
+  private activeProcesses = new Set<ReturnType<typeof spawn>>();
+
   async execute(options: SandboxExecutionOptions): Promise<ExecutionResult> {
     const startTime = Date.now();
     const timeoutMs = clampTimeout(options.timeoutMs);
@@ -108,6 +110,7 @@ export class ProcessSandboxRunner implements ISandboxRunner {
           detached: true, // Creates a new process group to allow killing entire child tree
           stdio: ['ignore', 'pipe', 'pipe'],
         });
+        this.activeProcesses.add(child);
       } catch (err) {
         const durationMs = Date.now() - startTime;
         return resolve({
@@ -125,6 +128,7 @@ export class ProcessSandboxRunner implements ISandboxRunner {
       }
 
       const finish = (result: Partial<ExecutionResult>) => {
+        this.activeProcesses.delete(child);
         if (hasResolved) return;
         hasResolved = true;
 
@@ -204,6 +208,27 @@ export class ProcessSandboxRunner implements ISandboxRunner {
         });
       });
     });
+  }
+
+  /**
+   * Gracefully/forcefully terminates all actively running sandbox child processes.
+   * Used during graceful shutdown.
+   */
+  async terminateAllProcesses(): Promise<void> {
+    for (const child of this.activeProcesses) {
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          try {
+            child.kill('SIGKILL');
+          } catch {
+            // Process may have already exited
+          }
+        }
+      }
+    }
+    this.activeProcesses.clear();
   }
 }
 

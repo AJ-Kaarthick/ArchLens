@@ -11,7 +11,7 @@ import { repositoryService, RepositoryService } from '../repository.service.js';
 import { detectExecutionEligibility } from './eligibility.js';
 import { workspaceManager, WorkspaceManager } from './workspace-manager.js';
 import { processSandboxRunner } from './process-runner.js';
-import { clampTimeout, validateArgs } from './policy.js';
+import { clampTimeout, validateArgs, isSandboxEnabled } from './policy.js';
 import type { ISandboxRunner, WorkspaceFile } from './types.js';
 
 export class ExecutionService {
@@ -30,6 +30,19 @@ export class ExecutionService {
   }
 
   async getEligibility(owner: string, repo: string): Promise<ExecutionEligibility> {
+    if (!isSandboxEnabled()) {
+      return {
+        eligible: false,
+        recommendedProfile: null,
+        detectedEntrypoints: [],
+        supportedProfiles: [],
+        refusalReason: 'disabled',
+        reasonMessage:
+          'Sandboxed code execution is disabled by deployment policy (ENABLE_SANDBOX=false).',
+        warnings: ['Code execution is disabled in this deployment.'],
+      };
+    }
+
     const analysis = await this.repoService.getLatestAnalysis(owner, repo);
     if (!analysis) {
       return {
@@ -53,6 +66,22 @@ export class ExecutionService {
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
     const executionId = `exec_${Date.now()}_${randomUUID().slice(0, 8)}`;
+
+    if (!isSandboxEnabled()) {
+      return {
+        executionId,
+        status: 'refused',
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+        durationMs: Date.now() - startTime,
+        profile: request.profile || 'node-script',
+        refusalReason: 'disabled',
+        refusalMessage:
+          'Sandboxed code execution is disabled on this server deployment.',
+        timestamp: new Date().toISOString(),
+      };
+    }
 
     // 1. Fetch latest analysis & repository records
     const record = await this.repoService.getLatestAnalysisWithRecord(owner, repo);

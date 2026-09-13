@@ -3,14 +3,17 @@ import type { FastifyPluginAsync } from 'fastify';
 import { ExecutionRequestSchema, type ApiError } from '@archlens/shared';
 import { executionService, ExecutionService } from '../services/sandbox/execution.service.js';
 import { workspaceManager, WorkspaceManager } from '../services/sandbox/workspace-manager.js';
-import { STATIC_PREVIEW_CSP } from '../services/sandbox/policy.js';
+import { STATIC_PREVIEW_CSP, isSandboxEnabled } from '../services/sandbox/policy.js';
+import { getRateLimitConfig, type RateLimitConfig } from '../config/rate-limit.js';
 
 export function createExecutionRoutes(
   customService?: ExecutionService,
-  customWsManager?: WorkspaceManager
+  customWsManager?: WorkspaceManager,
+  customRateLimitConfig?: RateLimitConfig
 ): FastifyPluginAsync {
   const service = customService || executionService;
   const wsManager = customWsManager || workspaceManager;
+  const rateLimits = customRateLimitConfig || getRateLimitConfig();
 
   return async (fastify) => {
     // 1. GET /api/repositories/:owner/:repo/eligibility
@@ -45,57 +48,87 @@ export function createExecutionRoutes(
     // 2. POST /api/repositories/:owner/:repo/execute
     fastify.post<{
       Params: { owner: string; repo: string };
-    }>('/api/repositories/:owner/:repo/execute', async (request, reply) => {
-      const { owner, repo } = request.params;
-      if (!owner || !repo) {
-        const errorResponse: ApiError = {
-          error: 'ValidationError',
-          message: 'Both owner and repo parameters are required.',
-          isRateLimit: false,
-          suggestedAction: 'Specify a valid repository owner and name in the URL.',
-        };
-        return reply.status(400).send(errorResponse);
-      }
-
-      let execRequest = {};
-      if (request.body) {
-        try {
-          execRequest = ExecutionRequestSchema.parse(request.body);
-        } catch (err: unknown) {
-          const message =
-            err && typeof err === 'object' && 'issues' in err && Array.isArray((err as any).issues)
-              ? (err as any).issues[0]?.message
-              : 'Invalid execution request payload.';
-
+    }>(
+      '/api/repositories/:owner/:repo/execute',
+      {
+        config: {
+          rateLimit: {
+            max: rateLimits.executeMax,
+            timeWindow: rateLimits.timeWindowMs,
+          },
+        },
+      },
+      async (request, reply) => {
+        const { owner, repo } = request.params;
+        if (!owner || !repo) {
           const errorResponse: ApiError = {
             error: 'ValidationError',
-            message,
+            message: 'Both owner and repo parameters are required.',
             isRateLimit: false,
-            suggestedAction: 'Ensure request body conforms to execution schema.',
+            suggestedAction: 'Specify a valid repository owner and name in the URL.',
           };
           return reply.status(400).send(errorResponse);
         }
-      }
 
-      try {
-        const result = await service.execute(owner, repo, execRequest);
-        return reply.status(200).send(result);
-      } catch (err: unknown) {
-        const errorResponse: ApiError = {
-          error: 'InternalError',
-          message: (err as Error).message || 'Execution failed unexpectedly.',
-          isRateLimit: false,
-          suggestedAction: 'Check repository entrypoints and retry.',
-        };
-        return reply.status(500).send(errorResponse);
+        let execRequest = {};
+        if (request.body) {
+          try {
+            execRequest = ExecutionRequestSchema.parse(request.body);
+          } catch (err: unknown) {
+            const message =
+              err && typeof err === 'object' && 'issues' in err && Array.isArray((err as any).issues)
+                ? (err as any).issues[0]?.message
+                : 'Invalid execution request payload.';
+
+            const errorResponse: ApiError = {
+              error: 'ValidationError',
+              message,
+              isRateLimit: false,
+              suggestedAction: 'Ensure request body conforms to execution schema.',
+            };
+            return reply.status(400).send(errorResponse);
+          }
+        }
+
+        try {
+          const result = await service.execute(owner, repo, execRequest);
+          request.log.info(
+            {
+              event: 'execution_completed',
+              owner,
+              repo,
+              executionId: result.executionId,
+              profile: result.profile,
+              status: result.status,
+              durationMs: result.durationMs,
+            },
+            'Repository execution completed'
+          );
+          return reply.status(200).send(result);
+        } catch (err: unknown) {
+          const errorResponse: ApiError = {
+            error: 'InternalError',
+            message: (err as Error).message || 'Execution failed unexpectedly.',
+            isRateLimit: false,
+            suggestedAction: 'Check repository entrypoints and retry.',
+          };
+          return reply.status(500).send(errorResponse);
+        }
       }
-    });
+    );
 
     const servePreview = async (
       executionId: string,
       subPath: string,
       reply: any
     ) => {
+      if (!isSandboxEnabled()) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: 'Preview and sandbox execution are disabled by deployment policy.',
+        });
+      }
+
       const resolved = await wsManager.resolvePreviewFile(executionId, subPath);
       if (!resolved) {
         return reply.status(404).send({

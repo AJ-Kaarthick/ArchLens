@@ -46,6 +46,21 @@ export class WorkspaceManager {
     }
   }
 
+  /**
+   * Cleans up all active preview workspaces and stops the sweep timer.
+   * Used during graceful shutdown.
+   */
+  async cleanupAllWorkspaces(): Promise<void> {
+    this.destroy();
+    const cleanups: Promise<void>[] = [];
+    for (const [id, item] of this.activeWorkspaces.entries()) {
+      this.activeWorkspaces.delete(id);
+      cleanups.push(item.meta.cleanup().catch(() => {}));
+    }
+    await Promise.all(cleanups);
+  }
+
+
   async prepareWorkspace(options: WorkspacePrepOptions): Promise<WorkspaceMeta> {
     const { executionId, files } = options;
 
