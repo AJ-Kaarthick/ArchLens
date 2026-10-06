@@ -25,7 +25,7 @@ ArchLens follows a staged, milestone-driven development roadmap. Each phase deli
 ## Phase 3: Grounded AI Explanation Layer & Caching — Completed
 
 - Backend AI provider abstraction (`IAIProvider`) in `apps/api`
-- Google Gemini implementation (`GeminiAIProvider`) using `@google/genai` (default: `gemini-2.0-flash`)
+- Google Gemini implementation (`GeminiAIProvider`) using `@google/genai` (default: `gemini-3.8-flash`)
 - Deterministic mock provider (`MockAIProvider`) with dynamic multi-language grounding for offline development and testing
 - Provider factory (`AIProviderFactory`) with automatic fallback when API keys are absent
 - Prompt-injection defense: bounded context (2,000 chars) and delimiter-sanitized `<untrusted_content>` wrapping via `ContextBuilder`
@@ -41,7 +41,7 @@ ArchLens follows a staged, milestone-driven development roadmap. Each phase deli
 - Line-aware chunking engine (`CodeChunker`): 50-line chunks, 10-line overlap, skips binary/vendor/lockfiles/minified files, strict caps (max 100 files, max 500 chunks, 256 KB file cap)
 - Dual-mode vector persistence: PostgreSQL `code_chunks` table supporting native `pgvector` HNSW vector distance search with an automatic in-memory cosine fallback when the extension is unavailable
 - Embedding provider abstraction (`IEmbeddingProvider`) in `apps/api`
-- Google Gemini embedding provider (`GeminiEmbeddingProvider`) using `text-embedding-004` via `@google/genai` (15s timeout, rate limit mapping)
+- Google Gemini embedding provider (`GeminiEmbeddingProvider`) using `gemini-embedding-2` via `@google/genai` (15s timeout, rate limit mapping)
 - Deterministic mock embedding provider (`MockEmbeddingProvider`) generating 768-dimensional normalized L2 vectors for 100% offline development and testing
 - Embedding provider factory (`EmbeddingProviderFactory`) with automatic fallback when API keys are absent
 - Retrieval Service (`RetrievalService`): Repository-scoped and analysis-scoped semantic indexing and search with metadata filtering (`pathPrefix`, `category`), score ranking, and execution timing

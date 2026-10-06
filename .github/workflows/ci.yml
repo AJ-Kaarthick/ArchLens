@@ -57,7 +57,6 @@ jobs:
       - name: Run tests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/archlens
-          ENABLE_SANDBOX: 'false'
         run: pnpm -r run test
 
       - name: Run production build

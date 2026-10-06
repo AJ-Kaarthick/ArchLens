@@ -10,6 +10,7 @@ export const SearchQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(5),
   pathPrefix: z.string().max(200).optional(),
   category: FileCategorySchema.optional(),
+  forceReindex: z.boolean().optional(),
 });
 
 export type SearchQuery = z.infer<typeof SearchQuerySchema>;

@@ -66,9 +66,9 @@ describe('Embedding Providers', () => {
       );
     });
 
-    it('defaults model to text-embedding-004', () => {
+    it('defaults model to gemini-embedding-2', () => {
       const provider = new GeminiEmbeddingProvider({ apiKey: 'fake-key' });
-      expect(provider.model).toBe('text-embedding-004');
+      expect(provider.model).toBe('gemini-embedding-2');
       expect(provider.dimension).toBe(768);
     });
 
@@ -85,8 +85,12 @@ describe('Embedding Providers', () => {
       expect(res).toHaveLength(2);
       expect(res[0]).toEqual(mockVector);
       expect(mockClient.models.embedContent).toHaveBeenCalledWith({
-        model: 'text-embedding-004',
+        model: 'gemini-embedding-2',
         contents: ['text 1', 'text 2'],
+        config: {
+          outputDimensionality: 768,
+          abortSignal: expect.any(AbortSignal),
+        },
       });
     });
 

@@ -24,6 +24,7 @@ export type ExplainTopic = z.infer<typeof ExplainTopicSchema>;
 export const ExplainRequestSchema = z.object({
   topic: ExplainTopicSchema.default('overview'),
   target: z.string().max(200).optional().nullable(),
+  bypassCache: z.boolean().optional(),
 });
 export type ExplainRequest = z.infer<typeof ExplainRequestSchema>;
 

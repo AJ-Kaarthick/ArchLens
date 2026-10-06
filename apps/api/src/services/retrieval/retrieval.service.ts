@@ -57,21 +57,27 @@ export class RetrievalService {
 
   /**
    * Indexes a collection of files for a specific analysis snapshot.
-   * If chunks already exist for this analysis, indexing is skipped (idempotent).
+   * If chunks already exist for this analysis, indexing is skipped (idempotent)
+   * unless options?.force is true, which deletes existing chunks and re-indexes.
    */
   async indexFiles(
     analysisId: number,
-    files: ChunkInputFile[]
+    files: ChunkInputFile[],
+    options?: { force?: boolean }
   ): Promise<{ indexedChunks: number }> {
-    // Check if already indexed
-    const existing = await db
-      .select({ id: codeChunks.id })
-      .from(codeChunks)
-      .where(eq(codeChunks.analysisId, analysisId))
-      .limit(1);
+    if (options?.force) {
+      await db.delete(codeChunks).where(eq(codeChunks.analysisId, analysisId));
+    } else {
+      // Check if already indexed
+      const existing = await db
+        .select({ id: codeChunks.id })
+        .from(codeChunks)
+        .where(eq(codeChunks.analysisId, analysisId))
+        .limit(1);
 
-    if (existing.length > 0) {
-      return { indexedChunks: existing.length };
+      if (existing.length > 0) {
+        return { indexedChunks: existing.length };
+      }
     }
 
     const chunks = this.chunker.chunkRepository(files);
@@ -132,7 +138,8 @@ export class RetrievalService {
   async indexAnalysis(
     owner: string,
     repo: string,
-    analysisId: number
+    analysisId: number,
+    options?: { force?: boolean }
   ): Promise<{ indexedChunks: number }> {
     const analysisRow = await db.query.analyses.findFirst({
       where: eq(analyses.id, analysisId),
@@ -192,7 +199,7 @@ export class RetrievalService {
       }
     }
 
-    return this.indexFiles(analysisId, filesToChunk);
+    return this.indexFiles(analysisId, filesToChunk, options);
   }
 
   /**
@@ -220,15 +227,16 @@ export class RetrievalService {
       analysisId = latest.analysisId;
     }
 
-    // Check if repository has chunks indexed; if not, index landmarks automatically
+    // Check if repository has chunks indexed; if not, index landmarks automatically.
+    // If forceReindex is requested, trigger re-indexing with options.force = true.
     const existingChunks = await db
       .select({ id: codeChunks.id })
       .from(codeChunks)
       .where(eq(codeChunks.analysisId, analysisId))
       .limit(1);
 
-    if (existingChunks.length === 0) {
-      await this.indexAnalysis(owner, repo, analysisId);
+    if (existingChunks.length === 0 || queryInput.forceReindex) {
+      await this.indexAnalysis(owner, repo, analysisId, { force: queryInput.forceReindex });
     }
 
     // 2. Generate query embedding

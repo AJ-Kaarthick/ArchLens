@@ -63,16 +63,78 @@ const TOPICS: { id: ExplainTopic; label: string; icon: LucideIcon; desc: string 
   },
 ];
 
+interface TopicState {
+  status: 'idle' | 'loading' | 'success' | 'error';
+  data: ExplainResponse | null;
+  error: ApiError | null;
+  progressStep: 'analyzing' | 'synthesizing';
+}
+
+const INITIAL_TOPIC_STATES: Record<ExplainTopic, TopicState> = {
+  overview: { status: 'idle', data: null, error: null, progressStep: 'analyzing' },
+  architecture: { status: 'idle', data: null, error: null, progressStep: 'analyzing' },
+  'tech-stack': { status: 'idle', data: null, error: null, progressStep: 'analyzing' },
+  entrypoints: { status: 'idle', data: null, error: null, progressStep: 'analyzing' },
+};
+
 export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSelectFile }) => {
   const [selectedTopic, setSelectedTopic] = useState<ExplainTopic>('overview');
   const [targetInput, setTargetInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<ApiError | null>(null);
-  const [explanation, setExplanation] = useState<ExplainResponse | null>(null);
+  const [topicStates, setTopicStates] = useState<Record<ExplainTopic, TopicState>>(INITIAL_TOPIC_STATES);
 
-  const fetchExplanation = async (topicToFetch: ExplainTopic, targetToFetch?: string) => {
-    setLoading(true);
-    setError(null);
+  // In-flight tracking: active AbortController and monotonic request counter per topic
+  const abortControllersRef = React.useRef<Map<ExplainTopic, AbortController>>(new Map());
+  const requestIdsRef = React.useRef<Record<ExplainTopic, number>>({
+    overview: 0,
+    architecture: 0,
+    'tech-stack': 0,
+    entrypoints: 0,
+  });
+  const isGenerating = Object.values(topicStates).some((s) => s.status === 'loading');
+
+  const fetchExplanation = async (
+    topicToFetch: ExplainTopic,
+    targetToFetch?: string,
+    bypassCache = false
+  ) => {
+    // 1. Monotonic request ID for this topic to ignore late out-of-order responses
+    const requestId = ++requestIdsRef.current[topicToFetch];
+
+    // 2. Abort any previous in-flight request for this topic
+    const prevController = abortControllersRef.current.get(topicToFetch);
+    if (prevController) {
+      prevController.abort();
+      abortControllersRef.current.delete(topicToFetch);
+    }
+
+    const controller = new AbortController();
+    abortControllersRef.current.set(topicToFetch, controller);
+
+    // 3. Transition topic state to loading and clear previous topic error
+    setTopicStates((prev) => ({
+      ...prev,
+      [topicToFetch]: {
+        ...prev[topicToFetch],
+        status: 'loading',
+        error: null,
+        progressStep: 'analyzing',
+      },
+    }));
+
+    // Natural progress step indicator for UI reassurance
+    const progressTimer = setTimeout(() => {
+      if (requestIdsRef.current[topicToFetch] === requestId) {
+        setTopicStates((prev) => {
+          if (prev[topicToFetch].status === 'loading') {
+            return {
+              ...prev,
+              [topicToFetch]: { ...prev[topicToFetch], progressStep: 'synthesizing' },
+            };
+          }
+          return prev;
+        });
+      }
+    }, 2500);
 
     const owner = analysis.repository.owner;
     const repo = analysis.repository.name;
@@ -84,39 +146,123 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
         body: JSON.stringify({
           topic: topicToFetch,
           target: targetToFetch ? targetToFetch.trim() : undefined,
+          bypassCache,
         }),
+        signal: controller.signal,
       });
+
+      // Ignore if superseded by a newer request for this topic
+      if (requestIdsRef.current[topicToFetch] !== requestId) {
+        return;
+      }
 
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data as ApiError);
+        const apiError = data as ApiError;
+        // Ignore cancelled requests
+        if (res.status === 499 || apiError.error === 'ClientClosedRequest') {
+          setTopicStates((prev) => ({
+            ...prev,
+            [topicToFetch]: {
+              ...prev[topicToFetch],
+              status: prev[topicToFetch].data ? 'success' : 'idle',
+            },
+          }));
+          return;
+        }
+        // User-facing error message sanitization: remove internal mock suggestions
+        if (apiError.suggestedAction?.includes('MockAIProvider')) {
+          apiError.suggestedAction = 'Please wait a moment and click Retry.';
+        }
+        setTopicStates((prev) => ({
+          ...prev,
+          [topicToFetch]: {
+            ...prev[topicToFetch],
+            status: 'error',
+            error: apiError,
+          },
+        }));
       } else {
-        setExplanation(data as ExplainResponse);
+        setTopicStates((prev) => ({
+          ...prev,
+          [topicToFetch]: {
+            ...prev[topicToFetch],
+            status: 'success',
+            data: data as ExplainResponse,
+            error: null, // Ensure previous error is wiped
+          },
+        }));
       }
-    } catch (err) {
-      setError({
-        error: 'NetworkError',
-        message: err instanceof Error ? err.message : 'Failed to generate explanation.',
-        isRateLimit: false,
-        suggestedAction: 'Ensure the ArchLens API server is running on port 3000.',
-      });
+    } catch (err: unknown) {
+      if (requestIdsRef.current[topicToFetch] !== requestId) {
+        return;
+      }
+      if (err instanceof Error && err.name === 'AbortError') {
+        // Explicitly aborted; restore topic status to idle (or success if previous data existed)
+        setTopicStates((prev) => ({
+          ...prev,
+          [topicToFetch]: {
+            ...prev[topicToFetch],
+            status: prev[topicToFetch].data ? 'success' : 'idle',
+          },
+        }));
+        return;
+      }
+
+      setTopicStates((prev) => ({
+        ...prev,
+        [topicToFetch]: {
+          ...prev[topicToFetch],
+          status: 'error',
+          error: {
+            error: 'NetworkError',
+            message: err instanceof Error ? err.message : 'Failed to generate explanation.',
+            isRateLimit: false,
+            suggestedAction: 'Please check your network connection and click Retry.',
+          },
+        },
+      }));
     } finally {
-      setLoading(false);
+      clearTimeout(progressTimer);
+      if (abortControllersRef.current.get(topicToFetch) === controller) {
+        abortControllersRef.current.delete(topicToFetch);
+      }
     }
   };
 
+  // Sync on repository/commit context change or mount
+  const repoContext = `${analysis.repository.owner}/${analysis.repository.name}:${analysis.commitSha || ''}`;
   useEffect(() => {
-    fetchExplanation(selectedTopic, targetInput);
-  }, [selectedTopic, analysis.repository.owner, analysis.repository.name]);
+    // Abort all in-flight requests when switching repositories or on cleanup
+    abortControllersRef.current.forEach((ctrl) => ctrl.abort());
+    abortControllersRef.current.clear();
+    setTopicStates(INITIAL_TOPIC_STATES);
+    setSelectedTopic('overview');
 
-  const handleTopicChange = (topic: ExplainTopic) => {
-    if (topic === selectedTopic) return;
-    setSelectedTopic(topic);
+    fetchExplanation('overview', undefined, false);
+
+    return () => {
+      abortControllersRef.current.forEach((ctrl) => ctrl.abort());
+      abortControllersRef.current.clear();
+    };
+  }, [repoContext]);
+
+  const handleTopicChange = (newTopic: ExplainTopic) => {
+    if (isGenerating) return;
+    if (newTopic === selectedTopic) return;
+
+    setSelectedTopic(newTopic);
+
+    // If new topic does not have cached data, fetch it
+    const targetState = topicStates[newTopic];
+    if (targetState.status === 'idle') {
+      fetchExplanation(newTopic, targetInput, false);
+    }
   };
 
   const handleRefresh = () => {
-    fetchExplanation(selectedTopic, targetInput);
+    fetchExplanation(selectedTopic, targetInput, true);
   };
 
   const getEvidenceCitationCard = (citation: EvidenceCitation, idx: number) => {
@@ -220,21 +366,37 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
             {TOPICS.map((t) => {
               const Icon = t.icon;
               const active = selectedTopic === t.id;
+              const isTopicLoading = topicStates[t.id].status === 'loading';
               return (
                 <button
                   key={t.id}
                   type="button"
+                  disabled={isGenerating}
+                  aria-disabled={isGenerating}
                   onClick={() => handleTopicChange(t.id)}
-                  disabled={loading && !explanation}
                   aria-pressed={active}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
                     active
                       ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
                       : 'bg-slate-950/80 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800'
+                  } ${
+                    isGenerating
+                      ? active
+                        ? 'cursor-wait opacity-95'
+                        : 'cursor-not-allowed opacity-50 pointer-events-none'
+                      : 'cursor-pointer'
                   }`}
-                  title={t.desc}
+                  title={
+                    isGenerating
+                      ? 'Topic switching is locked while explanation is generating'
+                      : t.desc
+                  }
                 >
-                  <Icon size={14} className={active ? 'text-white' : 'text-slate-400'} />
+                  {isTopicLoading ? (
+                    <RefreshCw size={14} className="animate-spin text-blue-300" />
+                  ) : (
+                    <Icon size={14} className={active ? 'text-white' : 'text-slate-400'} />
+                  )}
                   {t.label}
                 </button>
               );
@@ -249,19 +411,21 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
                 placeholder="Target path (e.g. apps/api)..."
                 value={targetInput}
                 onChange={(e) => setTargetInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleRefresh()}
+                onKeyDown={(e) => e.key === 'Enter' && !isGenerating && handleRefresh()}
+                disabled={isGenerating}
                 aria-label="Focus explanation on specific repository path"
-                className="bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 w-48 sm:w-56"
+                className="bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-blue-500 w-48 sm:w-56 disabled:opacity-50 disabled:cursor-not-allowed"
               />
             </div>
 
             <Button
               variant="secondary"
               size="sm"
-              loading={loading}
+              loading={topicStates[selectedTopic].status === 'loading'}
+              disabled={isGenerating}
               onClick={handleRefresh}
               icon={<RefreshCw size={13} />}
-              title="Regenerate or refresh explanation"
+              title={isGenerating ? 'Generating explanation...' : 'Regenerate or refresh explanation'}
             >
               Refresh
             </Button>
@@ -269,36 +433,62 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
         </CardContent>
       </Card>
 
-      {/* Error Alert */}
-      {error && (
+      {/* 1. Error Alert (Shown ONLY when current topic is in error state) */}
+      {topicStates[selectedTopic].status === 'error' && topicStates[selectedTopic].error && (
         <div
           role="alert"
-          className={`border rounded-xl p-4 flex items-start gap-3 text-xs ${
-            error.isRateLimit
+          className={`border rounded-xl p-4 flex items-start justify-between gap-3 text-xs ${
+            topicStates[selectedTopic].error?.isRateLimit
               ? 'bg-amber-950/40 border-amber-800/80 text-amber-200'
               : 'bg-red-950/40 border-red-800/80 text-red-200'
           }`}
         >
-          {error.isRateLimit ? (
-            <Clock size={18} className="text-amber-400 shrink-0 mt-0.5" />
-          ) : (
-            <AlertCircle size={18} className="text-red-400 shrink-0 mt-0.5" />
-          )}
-          <div className="space-y-1">
-            <div className="font-semibold">
-              {error.isRateLimit ? 'AI Provider Quota / Rate Limit' : error.error || 'Generation Error'}
-            </div>
-            <p className="opacity-90">{error.message}</p>
-            {error.suggestedAction && (
-              <p className="font-medium text-white/95 mt-1">Tip: {error.suggestedAction}</p>
+          <div className="flex items-start gap-3">
+            {topicStates[selectedTopic].error?.isRateLimit ? (
+              <Clock size={18} className="text-amber-400 shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle size={18} className="text-red-400 shrink-0 mt-0.5" />
             )}
+            <div className="space-y-1">
+              <div className="font-semibold">
+                {topicStates[selectedTopic].error?.isRateLimit
+                  ? 'AI Provider Quota / Rate Limit'
+                  : topicStates[selectedTopic].error?.error || 'Generation Error'}
+              </div>
+              <p className="opacity-90">{topicStates[selectedTopic].error?.message}</p>
+              {topicStates[selectedTopic].error?.suggestedAction && (
+                <p className="font-medium text-white/95 mt-1">
+                  Tip: {topicStates[selectedTopic].error?.suggestedAction}
+                </p>
+              )}
+            </div>
           </div>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={isGenerating}
+            onClick={() => fetchExplanation(selectedTopic, targetInput, false)}
+            icon={<RefreshCw size={12} />}
+            className="shrink-0"
+          >
+            Retry
+          </Button>
         </div>
       )}
 
-      {/* Loading Skeleton State */}
-      {loading && (
+      {/* 2. Loading Skeleton State (Shown ONLY when current topic is actively loading) */}
+      {topicStates[selectedTopic].status === 'loading' && (
         <div className="space-y-5 animate-pulse">
+          {/* Subtle status reassurance banner */}
+          <div className="flex items-center gap-2 text-xs text-blue-400 bg-blue-950/30 border border-blue-900/50 px-3.5 py-2.5 rounded-xl font-medium">
+            <RefreshCw size={13} className="animate-spin text-blue-400 shrink-0" />
+            <span>
+              {topicStates[selectedTopic].progressStep === 'analyzing'
+                ? 'Analyzing repository evidence & citations...'
+                : 'Synthesizing grounded architectural explanation...'}
+            </span>
+          </div>
+
           {/* Metadata Banner Skeleton */}
           <div className="h-10 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center px-4 justify-between">
             <Skeleton variant="text" className="w-48 h-4" />
@@ -325,13 +515,13 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
         </div>
       )}
 
-      {/* Active Explanation Display */}
-      {!loading && explanation && (
+      {/* 3. Active Explanation Display (Shown ONLY when current topic has successfully loaded data and is not loading/error) */}
+      {topicStates[selectedTopic].status === 'success' && topicStates[selectedTopic].data && (
         <div className="space-y-6">
           {/* Metadata & Cache Banner */}
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-slate-900/80 border border-slate-800 rounded-xl px-4 py-2.5">
             <div className="flex items-center gap-2">
-              {explanation.cached ? (
+              {topicStates[selectedTopic].data.cached ? (
                 <Badge variant="success" size="sm" icon={<Database size={12} />}>
                   PostgreSQL Cached Snapshot (Zero token latency)
                 </Badge>
@@ -344,14 +534,14 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
 
             <div className="flex items-center gap-3 text-slate-400 text-[11px] font-mono">
               <span>
-                Provider: <strong className="text-slate-200">{explanation.provider}</strong>
+                Provider: <strong className="text-slate-200">{topicStates[selectedTopic].data.provider}</strong>
               </span>
               <span>•</span>
               <span>
-                Model: <strong className="text-slate-200">{explanation.model}</strong>
+                Model: <strong className="text-slate-200">{topicStates[selectedTopic].data.model}</strong>
               </span>
               <span>•</span>
-              <span>{new Date(explanation.generatedAt).toLocaleTimeString()}</span>
+              <span>{new Date(topicStates[selectedTopic].data.generatedAt).toLocaleTimeString()}</span>
             </div>
           </div>
 
@@ -365,13 +555,13 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
             </CardHeader>
             <CardContent className="pt-1">
               <p className="text-sm text-slate-200 leading-relaxed font-medium">
-                {explanation.summary}
+                {topicStates[selectedTopic].data.summary}
               </p>
             </CardContent>
           </Card>
 
           {/* Key Architectural Takeaways Grid */}
-          {explanation.keyTakeaways.length > 0 && (
+          {topicStates[selectedTopic].data.keyTakeaways.length > 0 && (
             <Card variant="default">
               <CardHeader className="pb-3">
                 <CardTitle className="text-xs uppercase tracking-wider text-slate-300">
@@ -381,7 +571,7 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
               </CardHeader>
               <CardContent className="pt-2">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {explanation.keyTakeaways.map((takeaway, i) => (
+                  {topicStates[selectedTopic].data.keyTakeaways.map((takeaway, i) => (
                     <div
                       key={i}
                       className="flex items-start gap-3 p-3.5 rounded-xl bg-slate-950/70 border border-slate-800/80 text-xs text-slate-300 leading-relaxed"
@@ -412,19 +602,19 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
             </CardHeader>
             <CardContent className="pt-2">
               <div className="prose prose-invert prose-sm max-w-none text-slate-300 space-y-4 leading-relaxed [&>h1]:text-xl [&>h1]:font-bold [&>h1]:text-white [&>h1]:pb-2 [&>h1]:border-b [&>h1]:border-slate-800 [&>h2]:text-base [&>h2]:font-semibold [&>h2]:text-white [&>h3]:text-sm [&>h3]:font-semibold [&>h3]:text-slate-200 [&>p]:text-slate-300 [&>p]:leading-relaxed [&>ul]:list-disc [&>ul]:pl-5 [&>ol]:list-decimal [&>ol]:pl-5 [&>pre]:bg-slate-950 [&>pre]:p-4 [&>pre]:rounded-xl [&>pre]:border [&>pre]:border-slate-800 [&>pre]:overflow-x-auto [&>code]:bg-slate-800 [&>code]:px-1.5 [&>code]:py-0.5 [&>code]:rounded [&>code]:text-blue-300 [&>a]:text-blue-400 hover:[&>a]:underline">
-                <ReactMarkdown>{explanation.explanation}</ReactMarkdown>
+                <ReactMarkdown>{topicStates[selectedTopic].data.explanation}</ReactMarkdown>
               </div>
             </CardContent>
           </Card>
 
           {/* Grounded Evidence Citations */}
-          {explanation.evidence.length > 0 && (
+          {topicStates[selectedTopic].data.evidence.length > 0 && (
             <Card variant="default">
               <CardHeader className="pb-3">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                   <CardTitle className="text-xs uppercase tracking-wider text-slate-300">
                     <FileCheck2 size={15} className="text-blue-400" />
-                    Grounded Evidence ({explanation.evidence.length} Verified Citations)
+                    Grounded Evidence ({topicStates[selectedTopic].data.evidence.length} Verified Citations)
                   </CardTitle>
                   <span className="text-[11px] text-slate-500">
                     Cross-referenced with Phase 2 manifests, trees, and metrics
@@ -433,7 +623,7 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
               </CardHeader>
               <CardContent className="pt-2">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {explanation.evidence.map(getEvidenceCitationCard)}
+                  {topicStates[selectedTopic].data.evidence.map(getEvidenceCitationCard)}
                 </div>
               </CardContent>
             </Card>

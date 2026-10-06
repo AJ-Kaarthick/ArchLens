@@ -602,9 +602,10 @@ export function App() {
                   <span>How ArchLens Works Under the Hood</span>
                 </div>
                 <p className="text-slate-400 max-w-2xl leading-relaxed">
-                  ArchLens never evaluates, clones, or executes third-party code. Ingestion uses
-                  bounded GitHub REST APIs (10k items, 256 KB landmark previews). PostgreSQL persists
-                  analysis runs with idempotent upserts and sub-millisecond AI explanation caching.
+                  ArchLens ingestion and analysis never execute or clone repository code, operating
+                  purely via bounded GitHub REST APIs (10k items, 256 KB landmark previews). Sandboxed
+                  execution and live preview are optional, isolated user-triggered subsystems disabled by
+                  default in production deployments. PostgreSQL persists analysis snapshots with sub-millisecond AI explanation caching.
                 </p>
               </div>
 

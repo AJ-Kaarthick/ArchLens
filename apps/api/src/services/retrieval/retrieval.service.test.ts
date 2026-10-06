@@ -206,4 +206,79 @@ describe('RetrievalService', () => {
     await db.delete(repositories).where(eq(repositories.id, repoA.id));
     await db.delete(repositories).where(eq(repositories.id, repoB.id));
   });
+
+  it('supports force re-indexing to safely rebuild chunks for an existing analysis', async () => {
+    const testOwner = `reindex-test-${Date.now()}`;
+    const testRepo = 'reindex-repo';
+
+    const [repo] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const [analysis] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repo.id,
+        techStack: [],
+        architecture: {
+          isMonorepo: false,
+          monorepoTool: null,
+          workspaces: [],
+          detectedPatterns: [],
+          primaryEntrypoints: [],
+          keyLandmarks: [],
+        },
+        metrics: {
+          totalFiles: 1,
+          totalBytes: 50,
+          languages: {},
+          categories: {},
+          largestFiles: [],
+        },
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    const initialFiles: ChunkInputFile[] = [
+      { path: 'file1.ts', content: 'const a = 1;', size: 12, category: 'source' },
+      { path: 'file2.ts', content: 'const b = 2;', size: 12, category: 'source' },
+    ];
+
+    // Initial indexing
+    const res1 = await service.indexFiles(analysis.id, initialFiles);
+    expect(res1.indexedChunks).toBe(2);
+
+    // Calling again without force is idempotent and skips
+    const res2 = await service.indexFiles(analysis.id, initialFiles);
+    expect(res2.indexedChunks).toBeGreaterThan(0);
+
+    // Calling with force: true re-indexes
+    const updatedFiles: ChunkInputFile[] = [
+      { path: 'updated.ts', content: 'const updated = true;', size: 21, category: 'source' },
+    ];
+    const res3 = await service.indexFiles(analysis.id, updatedFiles, { force: true });
+    expect(res3.indexedChunks).toBe(1);
+
+    // Search reflects new chunk
+    const searchRes = await service.search(
+      testOwner,
+      testRepo,
+      { query: 'updated', limit: 5 },
+      analysis.id
+    );
+    expect(searchRes.results).toHaveLength(1);
+    expect(searchRes.results[0].filePath).toBe('updated.ts');
+
+    // Cleanup
+    await db.delete(repositories).where(eq(repositories.id, repo.id));
+  });
 });

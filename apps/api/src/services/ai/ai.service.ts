@@ -34,11 +34,17 @@ export class AIService {
       new RetrievalService(undefined, undefined, undefined, this.repoService);
   }
 
-  async explain(owner: string, repo: string, request: ExplainRequest): Promise<ExplainResponse> {
+  async explain(
+    owner: string,
+    repo: string,
+    request: ExplainRequest,
+    signal?: AbortSignal
+  ): Promise<ExplainResponse> {
     const cleanOwner = owner.trim();
     const cleanRepo = repo.trim().replace(/\.git$/, '');
     const cleanTopic = request.topic;
     const cleanTarget = request.target ? request.target.trim() : null;
+    const overallDeadline = Date.now() + 18000;
 
     // 1. Verify that repository has an existing deterministic analysis
     const latestRecord = await this.repoService.getLatestAnalysisWithRecord(cleanOwner, cleanRepo);
@@ -48,39 +54,45 @@ export class AIService {
 
     const { analysis, analysisId } = latestRecord;
 
-    // 2. Check cache in PostgreSQL
+    // 2. Check cache in PostgreSQL (unless bypassCache is explicitly requested)
     const targetFilter = cleanTarget
       ? eq(aiExplanations.target, cleanTarget)
       : isNull(aiExplanations.target);
 
-    const [cached] = await db
-      .select()
-      .from(aiExplanations)
-      .where(
-        and(
-          eq(aiExplanations.analysisId, analysisId),
-          eq(aiExplanations.topic, cleanTopic),
-          targetFilter
+    if (!request.bypassCache) {
+      const [cached] = await db
+        .select()
+        .from(aiExplanations)
+        .where(
+          and(
+            eq(aiExplanations.analysisId, analysisId),
+            eq(aiExplanations.topic, cleanTopic),
+            targetFilter
+          )
         )
-      )
-      .limit(1);
+        .limit(1);
 
-    if (cached) {
-      return {
-        topic: cached.topic as ExplainTopic,
-        target: cached.target,
-        summary: cached.summary,
-        explanation: cached.explanation,
-        keyTakeaways: cached.keyTakeaways,
-        evidence: cached.evidence,
-        generatedAt: cached.createdAt.toISOString(),
-        provider: cached.provider,
-        model: cached.model,
-        cached: true,
-      };
+      if (cached) {
+        return {
+          topic: cached.topic as ExplainTopic,
+          target: cached.target,
+          summary: cached.summary,
+          explanation: cached.explanation,
+          keyTakeaways: cached.keyTakeaways,
+          evidence: cached.evidence,
+          generatedAt: cached.createdAt.toISOString(),
+          provider: cached.provider,
+          model: cached.model,
+          cached: true,
+        };
+      }
     }
 
     // 3. Fetch optional landmark content (e.g. README.md) for contextual grounding
+    if (signal?.aborted) {
+      throw new Error('AI explanation request was aborted.');
+    }
+
     let readmeExcerpt: string | null = null;
     try {
       const readme = await this.repoService.getLandmarkContent(
@@ -97,32 +109,67 @@ export class AIService {
     }
 
     // 4. Fetch optional semantic retrieval chunks for localized architectural context
+    if (signal?.aborted) {
+      throw new Error('AI explanation request was aborted.');
+    }
+
     let retrievedChunks:
       { filePath: string; startLine: number; endLine: number; content: string }[] | undefined;
-    if (cleanTarget || cleanTopic === 'entrypoints' || cleanTopic === 'architecture') {
+    if (
+      !signal?.aborted &&
+      (cleanTarget || cleanTopic === 'entrypoints' || cleanTopic === 'architecture')
+    ) {
       try {
         const searchQuery =
           cleanTarget ||
           (cleanTopic === 'entrypoints'
             ? 'application startup entrypoint bootstrap listener'
             : 'architectural modular pattern boundaries');
-        const searchRes = await this.retrievalService.search(
-          cleanOwner,
-          cleanRepo,
-          { query: searchQuery, limit: 3, pathPrefix: cleanTarget || undefined },
-          analysisId
-        );
-        if (searchRes.results.length > 0) {
-          retrievedChunks = searchRes.results.map((r) => ({
-            filePath: r.filePath,
-            startLine: r.startLine,
-            endLine: r.endLine,
-            content: r.content,
-          }));
+
+        const remainingBeforeRetrieval = Math.max(0, overallDeadline - Date.now());
+        const retrievalTimeoutMs = Math.min(3500, remainingBeforeRetrieval);
+
+        if (retrievalTimeoutMs > 500) {
+          // Complementary retrieval bounded to 3500ms and remaining overall deadline
+          const retrievalPromise = this.retrievalService.search(
+            cleanOwner,
+            cleanRepo,
+            { query: searchQuery, limit: 3, pathPrefix: cleanTarget || undefined },
+            analysisId
+          );
+
+          const retrievalTimeout = new Promise<null>((resolve) => {
+            const timer = setTimeout(() => resolve(null), retrievalTimeoutMs);
+            if (typeof timer.unref === 'function') timer.unref();
+            if (signal) {
+              signal.addEventListener(
+                'abort',
+                () => {
+                  clearTimeout(timer);
+                  resolve(null);
+                },
+                { once: true }
+              );
+            }
+          });
+
+          const searchRes = await Promise.race([retrievalPromise, retrievalTimeout]);
+          if (searchRes && searchRes.results && searchRes.results.length > 0) {
+            retrievedChunks = searchRes.results.map((r) => ({
+              filePath: r.filePath,
+              startLine: r.startLine,
+              endLine: r.endLine,
+              content: r.content,
+            }));
+          }
         }
       } catch {
         // Retrieval is complementary; continue gracefully on any error
       }
+    }
+
+    if (signal?.aborted) {
+      throw new Error('AI explanation request was aborted.');
     }
 
     // 5. Build prompt-injection-safe bounded context
@@ -134,13 +181,19 @@ export class AIService {
       retrievedChunks,
     });
 
-    // 5. Query AI provider
+    if (signal?.aborted) {
+      throw new Error('AI explanation request was aborted.');
+    }
+
+    // 5. Query AI provider with shared overall deadline
     const result = await this.provider.explain({
       topic: cleanTopic,
       target: cleanTarget,
       context: groundedContext.combinedContext,
       repoName: `${cleanOwner}/${cleanRepo}`,
       analysis,
+      signal,
+      deadlineMs: overallDeadline,
     });
 
     // 6. Validate evidence citations strictly against Phase 2 facts
@@ -150,6 +203,18 @@ export class AIService {
 
     // 7. Cache explanation in PostgreSQL
     try {
+      if (request.bypassCache) {
+        await db
+          .delete(aiExplanations)
+          .where(
+            and(
+              eq(aiExplanations.analysisId, analysisId),
+              eq(aiExplanations.topic, cleanTopic),
+              targetFilter
+            )
+          );
+      }
+
       await db
         .insert(aiExplanations)
         .values({

@@ -62,7 +62,7 @@ docker exec archlens-postgres pg_isready -U postgres
 > - **Active Fallback Mode:** By default, the standard local Docker container (Option A) does not have the `pgvector` extension compiled or enabled. ArchLens will automatically activate the relational in-memory cosine fallback, and the web UI will display the status badge **"Relational Cosine Fallback"**.
 > - **Intentional Graceful Degradation:** The relational fallback is an intentional development and graceful-degradation mechanism. It must **not** be considered computationally or architecturally equivalent to production `pgvector` retrieval with HNSW indexing.
 > - **Mock Embedding Quality:** When `GEMINI_API_KEY` is omitted, ArchLens uses `MockEmbeddingProvider` (deterministic token/n-gram hashing). Its retrieval quality is **not** representative of production semantic-search quality, and low-confidence or unrelated queries may still match indexed chunks.
-> - **Production Evaluation:** Evaluating production-quality semantic search requires starting PostgreSQL with `pgvector` (Option B) and configuring a real embedding model (`GEMINI_API_KEY` with `text-embedding-004`).
+> - **Production Evaluation:** Evaluating production-quality semantic search requires starting PostgreSQL with `pgvector` (Option B) and configuring a real embedding model (`GEMINI_API_KEY` with `gemini-embedding-2`).
 > - **Zero Code Execution:** ArchLens semantic retrieval indexes and queries static text slices only. Repository code is never executed.
 
 ---
@@ -89,9 +89,14 @@ The backend accepts configuration via environment variables:
 | `GITHUB_TOKEN`              | Optional GitHub Personal Access Token (server-side only) to raise REST rate limits from 60 to 5,000 req/hr  | _None_                                                 |
 | `GEMINI_API_KEY`            | Optional Google Gemini API key (server-side only). When omitted, ArchLens uses Mock providers gracefully    | _None_                                                 |
 | `AI_PROVIDER`               | AI explanation provider override (`gemini` or `mock`). Defaults to `gemini` if API key present, else `mock` | `gemini` (if key set) / `mock`                         |
-| `GEMINI_MODEL`              | Gemini model name                                                                                           | `gemini-2.0-flash`                                     |
+| `GEMINI_MODEL`              | Gemini model name                                                                                           | `gemini-3.8-flash`                                     |
+| `GEMINI_FALLBACK_API_KEY`   | Optional secondary Gemini project API key for automatic retry fallback on transient 503/429 outages        | _None_                                                 |
+| `GEMINI_FALLBACK_MODEL`     | Gemini fallback generation model name                                                                       | `gemini-3.7-flash`                                     |
+| `GEMINI_TERTIARY_API_KEY`   | Optional tertiary Gemini project API key for additional model/project fallback tier                         | _None_                                                 |
+| `GEMINI_TERTIARY_MODEL`     | Gemini tertiary fallback generation model name                                                              | `gemini-3.6-flash`                                     |
+| `GEMINI_THINKING_LEVEL`     | Thinking level for Gemini 3.x Flash models (`LOW`, `MEDIUM`, `HIGH`) to control latency vs reasoning tokens | `LOW`                                                  |
 | `EMBEDDING_PROVIDER`        | Embedding provider override (`gemini` or `mock`). Defaults to `gemini` if API key present, else `mock`      | `gemini` (if key set) / `mock`                         |
-| `GEMINI_EMBEDDING_MODEL`    | Gemini text embedding model name                                                                            | `text-embedding-004`                                   |
+| `GEMINI_EMBEDDING_MODEL`    | Gemini text embedding model name                                                                            | `gemini-embedding-2`                                   |
 | `PORT`                      | API server listen port                                                                                      | `3000`                                                 |
 | `HOST`                      | API server host interface                                                                                   | `0.0.0.0`                                              |
 | `LOG_LEVEL`                 | Structured Pino log level (`info`, `debug`, `warn`, `error`, `silent`)                                      | `info`                                                 |
@@ -104,7 +109,7 @@ The backend accepts configuration via environment variables:
 | `ENABLE_SANDBOX`            | Deployment toggle for execution (`true` or `false`). Defaults to `false` in production env                  | `true` in dev/test, `false` in prod                    |
 
 > [!NOTE]
-> `GITHUB_TOKEN` and `GEMINI_API_KEY` are strictly consumed server-side in `apps/api`. They are never exposed to `apps/web` or `@archlens/shared`. If `GEMINI_API_KEY` is not provided, ArchLens runs 100% offline using `MockAIProvider` and `MockEmbeddingProvider`.
+> `GITHUB_TOKEN`, `GEMINI_API_KEY`, `GEMINI_FALLBACK_API_KEY`, and `GEMINI_TERTIARY_API_KEY` are strictly consumed server-side in `apps/api`. They are never exposed to `apps/web` or `@archlens/shared`. If `GEMINI_API_KEY` is not provided, ArchLens runs 100% offline using `MockAIProvider` and `MockEmbeddingProvider`.
 
 > [!WARNING]
 > **Sandbox Model Disclosure:** The sandbox execution subsystem is a **restricted host-process runner** with a stripped environment, in-process V8 heap limits, path traversal defenses, and process-group termination (`SIGKILL`). It is **NOT** a kernel-level microVM or container isolation sandbox. In production environments, `ENABLE_SANDBOX` defaults to `false` in `.env.example`.
@@ -130,9 +135,9 @@ pnpm --filter @archlens/api db:migrate
 
 The API server exposes standardized health endpoints for orchestration and monitoring:
 
-- **Liveness Probe (`GET /health/liveness`)**: Returns HTTP 200 `{ status: "ok", check: "liveness", version: "0.1.0", uptime: ... }`. Verifies that the Node process is running. Does not touch the database.
-- **Readiness Probe (`GET /health/readiness`)**: Executes `SELECT 1` via `checkDbConnection()`. Returns HTTP 200 `{ status: "ready", check: "readiness", database: "connected", version: "0.1.0" }` when reachable, or HTTP 503 `{ status: "unavailable", database: "disconnected" }` when unavailable (without exposing internal connection errors).
-- **Legacy Health Probe (`GET /health`)**: Returns HTTP 200 `{ status: "ok", version: "0.1.0" }`.
+- **Liveness Probe (`GET /health/liveness`)**: Returns HTTP 200 `{ status: "ok", check: "liveness", version: "1.0.0", uptime: ... }`. Verifies that the Node process is running. Does not touch the database.
+- **Readiness Probe (`GET /health/readiness`)**: Executes `SELECT 1` via `checkDbConnection()`. Returns HTTP 200 `{ status: "ready", check: "readiness", database: "connected", version: "1.0.0" }` when reachable, or HTTP 503 `{ status: "unavailable", database: "disconnected" }` when unavailable (without exposing internal connection errors).
+- **Legacy Health Probe (`GET /health`)**: Returns HTTP 200 `{ status: "ok", version: "1.0.0" }`.
 
 Rate limiting is disabled on all health probes.
 

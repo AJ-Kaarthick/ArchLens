@@ -14,7 +14,7 @@ export class GeminiEmbeddingProvider implements IEmbeddingProvider {
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY is required for GeminiEmbeddingProvider');
     }
-    this.model = options.model || process.env.GEMINI_EMBEDDING_MODEL || 'text-embedding-004';
+    this.model = options.model || process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-2';
     this.timeoutMs = options.timeoutMs ?? 15000;
     this.client = new GoogleGenAI({ apiKey });
   }
@@ -61,6 +61,10 @@ export class GeminiEmbeddingProvider implements IEmbeddingProvider {
         const response = await this.client.models.embedContent({
           model: this.model,
           contents: texts,
+          config: {
+            outputDimensionality: 768,
+            abortSignal: abortController.signal,
+          },
         });
 
         if (response.embeddings && response.embeddings.length > 0) {

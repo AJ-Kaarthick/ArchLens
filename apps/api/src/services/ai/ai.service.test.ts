@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { AIService, RepositoryNotAnalyzedError } from './ai.service.js';
 import type { IAIProvider, AIExplanationResult } from './provider.interface.js';
 import { RepositoryService } from '../repository.service.js';
+import type { RetrievalService } from '../retrieval/retrieval.service.js';
 import { initDb, sql, db } from '../../db/index.js';
 import { repositories, analyses, aiExplanations } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
@@ -145,7 +146,16 @@ describe('AIService', () => {
       getLandmarkContent: vi.fn().mockResolvedValue({ content: 'Mock README' }),
     } as unknown as RepositoryService;
 
-    const service = new AIService(mockProvider, mockRepoService);
+    const mockRetrievalService = {
+      search: vi.fn().mockResolvedValue({
+        query: 'test',
+        results: [],
+        totalChunks: 0,
+        executionTimeMs: 1,
+      }),
+    } as unknown as RetrievalService;
+
+    const service = new AIService(mockProvider, mockRepoService, mockRetrievalService);
 
     // Call 1: Uncached -> Should invoke provider
     const res1 = await service.explain(testOwner, testRepo, { topic: 'overview' });
