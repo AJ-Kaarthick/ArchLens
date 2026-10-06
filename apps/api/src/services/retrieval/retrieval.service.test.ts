@@ -281,4 +281,61 @@ describe('RetrievalService', () => {
     // Cleanup
     await db.delete(repositories).where(eq(repositories.id, repo.id));
   });
+
+  it('single-flights concurrent duplicate indexing operations', async () => {
+    const testOwner = `singleflight-${Date.now()}`;
+    const testRepo = 'sf-repo';
+
+    const [repo] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const [analysis] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repo.id,
+        techStack: [],
+        architecture: {
+          isMonorepo: false,
+          monorepoTool: null,
+          workspaces: [],
+          detectedPatterns: [],
+          primaryEntrypoints: [],
+          keyLandmarks: [],
+        },
+        metrics: {
+          totalFiles: 1,
+          totalBytes: 50,
+          languages: {},
+          categories: {},
+          largestFiles: [],
+        },
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    const files: ChunkInputFile[] = [
+      { path: 'concurrent.ts', content: 'const c = 42;', size: 14, category: 'source' },
+    ];
+
+    // Trigger two indexFiles simultaneously on the exact same analysisId
+    const [p1, p2] = await Promise.all([
+      service.indexFiles(analysis.id, files),
+      service.indexFiles(analysis.id, files),
+    ]);
+
+    expect(p1.indexedChunks).toBe(1);
+    expect(p2.indexedChunks).toBe(1);
+
+    await db.delete(repositories).where(eq(repositories.id, repo.id));
+  });
 });

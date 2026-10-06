@@ -25,7 +25,69 @@ export class RepositoryService {
     const repoMetadata = await this.gh.getRepositoryMetadata(cleanOwner, cleanRepo);
     const treeResult = await this.gh.getGitTree(cleanOwner, cleanRepo, repoMetadata.defaultBranch);
 
-    // 2. Fetch key manifests for deeper dependency inspection
+    // 2. Upsert repository in PostgreSQL
+    const [repoRow] = await db
+      .insert(repositories)
+      .values({
+        owner: cleanOwner,
+        name: cleanRepo,
+        url: repoMetadata.url,
+        defaultBranch: repoMetadata.defaultBranch,
+        description: repoMetadata.description,
+        stars: repoMetadata.stars,
+        forks: repoMetadata.forks,
+        primaryLanguage: repoMetadata.primaryLanguage,
+        createdAt: new Date(repoMetadata.createdAt),
+        updatedAt: new Date(repoMetadata.updatedAt),
+      })
+      .onConflictDoUpdate({
+        target: [repositories.owner, repositories.name],
+        set: {
+          url: repoMetadata.url,
+          defaultBranch: repoMetadata.defaultBranch,
+          description: repoMetadata.description,
+          stars: repoMetadata.stars,
+          forks: repoMetadata.forks,
+          primaryLanguage: repoMetadata.primaryLanguage,
+          updatedAt: new Date(repoMetadata.updatedAt),
+        },
+      })
+      .returning();
+
+    // 3. Check for existing deterministic analysis for this repository and commit SHA
+    if (treeResult.sha) {
+      const [existingAnalysis] = await db
+        .select()
+        .from(analyses)
+        .where(and(eq(analyses.repositoryId, repoRow.id), eq(analyses.commitSha, treeResult.sha)))
+        .limit(1);
+
+      if (existingAnalysis) {
+        return {
+          repository: {
+            id: String(repoRow.id),
+            owner: repoRow.owner,
+            name: repoRow.name,
+            url: repoRow.url,
+            defaultBranch: repoRow.defaultBranch,
+            description: repoRow.description,
+            stars: repoRow.stars,
+            forks: repoRow.forks,
+            primaryLanguage: repoRow.primaryLanguage,
+            createdAt: repoRow.createdAt.toISOString(),
+            updatedAt: repoRow.updatedAt.toISOString(),
+          },
+          commitSha: existingAnalysis.commitSha,
+          techStack: existingAnalysis.techStack,
+          architecture: existingAnalysis.architecture,
+          metrics: existingAnalysis.metrics,
+          tree: existingAnalysis.tree,
+          analyzedAt: existingAnalysis.analyzedAt.toISOString(),
+        };
+      }
+    }
+
+    // 4. Fetch key manifests for deeper dependency inspection (only on new/changed commits)
     const manifestContents: Record<string, string> = {};
     const keyManifestPaths = [
       'package.json',
@@ -59,7 +121,7 @@ export class RepositoryService {
       }
     }
 
-    // 3. Perform deterministic analysis
+    // 5. Perform deterministic analysis
     const analysis = analyzeRepositoryData({
       repository: repoMetadata,
       commitSha: treeResult.sha,
@@ -68,45 +130,19 @@ export class RepositoryService {
       analyzedAt: new Date().toISOString(),
     });
 
-    // 4. Upsert repository in PostgreSQL
-    const [repoRow] = await db
-      .insert(repositories)
+    // 6. Store analysis record
+    await db
+      .insert(analyses)
       .values({
-        owner: cleanOwner,
-        name: cleanRepo,
-        url: repoMetadata.url,
-        defaultBranch: repoMetadata.defaultBranch,
-        description: repoMetadata.description,
-        stars: repoMetadata.stars,
-        forks: repoMetadata.forks,
-        primaryLanguage: repoMetadata.primaryLanguage,
-        createdAt: new Date(repoMetadata.createdAt),
-        updatedAt: new Date(repoMetadata.updatedAt),
+        repositoryId: repoRow.id,
+        commitSha: analysis.commitSha,
+        techStack: analysis.techStack,
+        architecture: analysis.architecture,
+        metrics: analysis.metrics,
+        tree: analysis.tree,
+        analyzedAt: new Date(analysis.analyzedAt),
       })
-      .onConflictDoUpdate({
-        target: [repositories.owner, repositories.name],
-        set: {
-          url: repoMetadata.url,
-          defaultBranch: repoMetadata.defaultBranch,
-          description: repoMetadata.description,
-          stars: repoMetadata.stars,
-          forks: repoMetadata.forks,
-          primaryLanguage: repoMetadata.primaryLanguage,
-          updatedAt: new Date(repoMetadata.updatedAt),
-        },
-      })
-      .returning();
-
-    // 5. Store analysis record
-    await db.insert(analyses).values({
-      repositoryId: repoRow.id,
-      commitSha: analysis.commitSha,
-      techStack: analysis.techStack,
-      architecture: analysis.architecture,
-      metrics: analysis.metrics,
-      tree: analysis.tree,
-      analyzedAt: new Date(analysis.analyzedAt),
-    });
+      .onConflictDoNothing();
 
     // Update repository id with Postgres generated id
     analysis.repository.id = String(repoRow.id);

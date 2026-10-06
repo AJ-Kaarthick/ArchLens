@@ -55,6 +55,10 @@ export const analyses = pgTable(
       .on(table.repositoryId, table.analyzedAt)
       .desc(),
     analyzedAtDescIdx: index('analyses_analyzed_at_desc_idx').on(table.analyzedAt).desc(),
+    repoCommitShaIdx: uniqueIndex('analyses_repo_commit_sha_unique').on(
+      table.repositoryId,
+      table.commitSha
+    ),
   })
 );
 
@@ -62,17 +66,25 @@ export const aiExplanations = pgTable(
   'ai_explanations',
   {
     id: serial('id').primaryKey(),
-    analysisId: integer('analysis_id')
+    repositoryId: integer('repository_id')
       .notNull()
-      .references(() => analyses.id, { onDelete: 'cascade' }),
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    analysisId: integer('analysis_id').references(() => analyses.id, { onDelete: 'set null' }),
+    commitSha: text('commit_sha').notNull(),
     topic: text('topic').notNull(),
     target: text('target'),
-    summary: text('summary').notNull(),
-    explanation: text('explanation').notNull(),
-    keyTakeaways: jsonb('key_takeaways').$type<string[]>().notNull(),
-    evidence: jsonb('evidence').$type<EvidenceCitation[]>().notNull(),
-    provider: text('provider').notNull(),
-    model: text('model').notNull(),
+    promptVersion: integer('prompt_version').notNull().default(1),
+    status: text('status').notNull().default('ready'),
+    retryAt: timestamp('retry_at', { withTimezone: true }),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastErrorCategory: text('last_error_category'),
+    lastErrorMessage: text('last_error_message'),
+    summary: text('summary'),
+    explanation: text('explanation'),
+    keyTakeaways: jsonb('key_takeaways').$type<string[]>(),
+    evidence: jsonb('evidence').$type<EvidenceCitation[]>(),
+    provider: text('provider'),
+    model: text('model'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
   },
   (table) => ({
@@ -80,6 +92,19 @@ export const aiExplanations = pgTable(
       table.analysisId,
       table.topic,
       table.target
+    ),
+    uniqueLogicalExplanationIdx: uniqueIndex(
+      'ai_explanations_repo_sha_topic_target_version_unique'
+    ).on(
+      table.repositoryId,
+      table.commitSha,
+      table.topic,
+      table.target,
+      table.promptVersion
+    ),
+    repoCommitShaIdx: index('ai_explanations_repo_commit_sha_idx').on(
+      table.repositoryId,
+      table.commitSha
     ),
   })
 );

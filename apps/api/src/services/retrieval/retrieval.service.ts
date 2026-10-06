@@ -55,12 +55,42 @@ export class RetrievalService {
     this.repoService = repoService || new RepositoryService(this.githubService);
   }
 
+  private inFlightIndexAnalysis = new Map<
+    string,
+    Promise<{ indexedChunks: number; failedFetches?: number }>
+  >();
+  private inFlightIndexFiles = new Map<number, Promise<{ indexedChunks: number }>>();
+
   /**
-   * Indexes a collection of files for a specific analysis snapshot.
+   * Indexes a collection of files for a specific analysis snapshot with single-flighting.
    * If chunks already exist for this analysis, indexing is skipped (idempotent)
    * unless options?.force is true, which deletes existing chunks and re-indexes.
    */
   async indexFiles(
+    analysisId: number,
+    files: ChunkInputFile[],
+    options?: { force?: boolean }
+  ): Promise<{ indexedChunks: number }> {
+    if (!options?.force) {
+      const inFlight = this.inFlightIndexFiles.get(analysisId);
+      if (inFlight) {
+        return inFlight;
+      }
+    }
+
+    const indexingPromise = (async () => {
+      try {
+        return await this.performIndexFiles(analysisId, files, options);
+      } finally {
+        this.inFlightIndexFiles.delete(analysisId);
+      }
+    })();
+
+    this.inFlightIndexFiles.set(analysisId, indexingPromise);
+    return indexingPromise;
+  }
+
+  private async performIndexFiles(
     analysisId: number,
     files: ChunkInputFile[],
     options?: { force?: boolean }
@@ -138,9 +168,33 @@ export class RetrievalService {
   }
 
   /**
-   * Automatically indexes landmark and entrypoint files for an existing analysis record.
+   * Automatically indexes landmark and entrypoint files for an existing analysis record with single-flighting.
    */
   async indexAnalysis(
+    owner: string,
+    repo: string,
+    analysisId: number,
+    options?: { force?: boolean }
+  ): Promise<{ indexedChunks: number; failedFetches?: number }> {
+    const flightKey = `${owner.toLowerCase()}/${repo.toLowerCase()}:${analysisId}:${options?.force ? 'force' : 'normal'}`;
+    const inFlight = this.inFlightIndexAnalysis.get(flightKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const indexingPromise = (async () => {
+      try {
+        return await this.performIndexAnalysis(owner, repo, analysisId, options);
+      } finally {
+        this.inFlightIndexAnalysis.delete(flightKey);
+      }
+    })();
+
+    this.inFlightIndexAnalysis.set(flightKey, indexingPromise);
+    return indexingPromise;
+  }
+
+  private async performIndexAnalysis(
     owner: string,
     repo: string,
     analysisId: number,

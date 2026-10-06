@@ -312,8 +312,228 @@ describe('AIService', () => {
     expect(result.evidence[0].reference).toBe('package.json');
 
     // Clean up
-    await db.delete(aiExplanations).where(eq(aiExplanations.analysisId, analysisRow.id));
-    await db.delete(analyses).where(eq(analyses.id, analysisRow.id));
+    await db.delete(repositories).where(eq(repositories.id, repoRow.id));
+  });
+
+  it('separates cache by topic and target', async () => {
+    const testOwner = `cache-keys-${Date.now()}`;
+    const testRepo = 'key-repo';
+
+    const [repoRow] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const mockAnalysis: AnalysisResult = {
+      repository: {
+        id: String(repoRow.id),
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        description: null,
+        stars: 10,
+        forks: 1,
+        primaryLanguage: 'TypeScript',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      commitSha: 'sha-keys-123',
+      techStack: [],
+      architecture: {
+        isMonorepo: false,
+        monorepoTool: null,
+        workspaces: [],
+        detectedPatterns: [],
+        primaryEntrypoints: [],
+        keyLandmarks: [],
+      },
+      metrics: {
+        totalFiles: 1,
+        totalBytes: 100,
+        languages: {},
+        categories: {},
+        largestFiles: [],
+      },
+      tree: [],
+      analyzedAt: new Date().toISOString(),
+    };
+
+    const [analysisRow] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repoRow.id,
+        commitSha: mockAnalysis.commitSha,
+        techStack: mockAnalysis.techStack,
+        architecture: mockAnalysis.architecture,
+        metrics: mockAnalysis.metrics,
+        tree: mockAnalysis.tree,
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    const mockExplain = vi.fn().mockImplementation((req) => ({
+      summary: `Summary for ${req.topic} - ${req.target || 'no-target'}`,
+      explanation: 'Detailed text',
+      keyTakeaways: ['Point 1'],
+      evidence: [],
+      provider: 'mock',
+      model: 'model',
+    }));
+
+    const mockProvider: IAIProvider = {
+      name: 'mock',
+      model: 'model',
+      explain: mockExplain,
+    };
+
+    const mockRepoService = {
+      getLatestAnalysisWithRecord: vi.fn().mockResolvedValue({
+        analysis: mockAnalysis,
+        analysisId: analysisRow.id,
+        repositoryId: repoRow.id,
+      }),
+      getLandmarkContent: vi.fn().mockResolvedValue(null),
+    } as unknown as RepositoryService;
+
+    const service = new AIService(mockProvider, mockRepoService);
+
+    // Call A: overview with no target
+    await service.explain(testOwner, testRepo, { topic: 'overview' });
+    expect(mockExplain).toHaveBeenCalledTimes(1);
+
+    // Call B: overview with target -> must NOT be served from Call A's cache
+    await service.explain(testOwner, testRepo, { topic: 'overview', target: 'src/server.ts' });
+    expect(mockExplain).toHaveBeenCalledTimes(2);
+
+    // Call C: architecture with target -> must NOT be served from Call B's cache
+    await service.explain(testOwner, testRepo, { topic: 'architecture', target: 'src/server.ts' });
+    expect(mockExplain).toHaveBeenCalledTimes(3);
+
+    // Call D: repeat Call B -> MUST be served from cache
+    const cachedB = await service.explain(testOwner, testRepo, {
+      topic: 'overview',
+      target: 'src/server.ts',
+    });
+    expect(cachedB.cached).toBe(true);
+    expect(mockExplain).toHaveBeenCalledTimes(3);
+
+    await db.delete(repositories).where(eq(repositories.id, repoRow.id));
+  });
+
+  it('basic AI explanation does not invoke retrieval service or require embeddings', async () => {
+    const testOwner = `no-retrieval-${Date.now()}`;
+    const testRepo = 'no-embed-repo';
+
+    const [repoRow] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const mockAnalysis: AnalysisResult = {
+      repository: {
+        id: String(repoRow.id),
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        description: null,
+        stars: 10,
+        forks: 1,
+        primaryLanguage: 'TypeScript',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      commitSha: 'sha-no-embed',
+      techStack: [],
+      architecture: {
+        isMonorepo: false,
+        monorepoTool: null,
+        workspaces: [],
+        detectedPatterns: [],
+        primaryEntrypoints: ['src/main.ts'],
+        keyLandmarks: [],
+      },
+      metrics: {
+        totalFiles: 1,
+        totalBytes: 100,
+        languages: {},
+        categories: {},
+        largestFiles: [],
+      },
+      tree: [],
+      analyzedAt: new Date().toISOString(),
+    };
+
+    const [analysisRow] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repoRow.id,
+        commitSha: mockAnalysis.commitSha,
+        techStack: mockAnalysis.techStack,
+        architecture: mockAnalysis.architecture,
+        metrics: mockAnalysis.metrics,
+        tree: mockAnalysis.tree,
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    const mockExplain = vi.fn().mockResolvedValue({
+      summary: 'Summary without retrieval',
+      explanation: 'Explanation without retrieval',
+      keyTakeaways: ['Point 1'],
+      evidence: [],
+      provider: 'mock',
+      model: 'model',
+    });
+
+    const mockProvider: IAIProvider = {
+      name: 'mock',
+      model: 'model',
+      explain: mockExplain,
+    };
+
+    const mockRetrievalService = {
+      search: vi.fn(),
+      indexAnalysis: vi.fn(),
+      indexFiles: vi.fn(),
+    } as unknown as RetrievalService;
+
+    const mockRepoService = {
+      getLatestAnalysisWithRecord: vi.fn().mockResolvedValue({
+        analysis: mockAnalysis,
+        analysisId: analysisRow.id,
+        repositoryId: repoRow.id,
+      }),
+      getLandmarkContent: vi.fn().mockResolvedValue(null),
+    } as unknown as RepositoryService;
+
+    const service = new AIService(mockProvider, mockRepoService, mockRetrievalService);
+
+    // Request entrypoints with a target (previously would trigger retrieval stampede)
+    const res = await service.explain(testOwner, testRepo, {
+      topic: 'entrypoints',
+      target: 'src/main.ts',
+    });
+
+    expect(res.summary).toBe('Summary without retrieval');
+    expect(mockRetrievalService.search).not.toHaveBeenCalled();
+    expect(mockRetrievalService.indexAnalysis).not.toHaveBeenCalled();
+
     await db.delete(repositories).where(eq(repositories.id, repoRow.id));
   });
 });

@@ -53,9 +53,11 @@ export class AIService {
       throw new RepositoryNotAnalyzedError(cleanOwner, cleanRepo);
     }
 
-    const { analysis, analysisId } = latestRecord;
+    const { analysis, analysisId, repositoryId } = latestRecord;
+    const promptVersion = 1;
+    const commitSha = analysis.commitSha || 'unknown';
 
-    // 2. Check cache in PostgreSQL (unless bypassCache is explicitly requested)
+    // 2. Check cache in PostgreSQL using logical identity (repo, sha, topic, target, promptVersion)
     const targetFilter = cleanTarget
       ? eq(aiExplanations.target, cleanTarget)
       : isNull(aiExplanations.target);
@@ -66,24 +68,27 @@ export class AIService {
         .from(aiExplanations)
         .where(
           and(
-            eq(aiExplanations.analysisId, analysisId),
+            eq(aiExplanations.repositoryId, repositoryId),
+            eq(aiExplanations.commitSha, commitSha),
             eq(aiExplanations.topic, cleanTopic),
-            targetFilter
+            targetFilter,
+            eq(aiExplanations.promptVersion, promptVersion),
+            eq(aiExplanations.status, 'ready')
           )
         )
         .limit(1);
 
-      if (cached) {
+      if (cached && cached.summary && cached.explanation) {
         return {
           topic: cached.topic as ExplainTopic,
           target: cached.target,
           summary: cached.summary,
           explanation: cached.explanation,
-          keyTakeaways: cached.keyTakeaways,
-          evidence: cached.evidence,
+          keyTakeaways: cached.keyTakeaways || [],
+          evidence: cached.evidence || [],
           generatedAt: cached.createdAt.toISOString(),
-          provider: cached.provider,
-          model: cached.model,
+          provider: cached.provider || 'gemini',
+          model: cached.model || 'unknown',
           cached: true,
         };
       }
@@ -109,77 +114,12 @@ export class AIService {
       // README fetch is optional; continue if missing or rate limited
     }
 
-    // 4. Fetch optional semantic retrieval chunks for localized architectural context
-    if (signal?.aborted) {
-      throw new Error('AI explanation request was aborted.');
-    }
-
-    let retrievedChunks:
-      { filePath: string; startLine: number; endLine: number; content: string }[] | undefined;
-    if (
-      !signal?.aborted &&
-      (cleanTarget || cleanTopic === 'entrypoints' || cleanTopic === 'architecture')
-    ) {
-      try {
-        const searchQuery =
-          cleanTarget ||
-          (cleanTopic === 'entrypoints'
-            ? 'application startup entrypoint bootstrap listener'
-            : 'architectural modular pattern boundaries');
-
-        const remainingBeforeRetrieval = Math.max(0, overallDeadline - Date.now());
-        const retrievalTimeoutMs = Math.min(3500, remainingBeforeRetrieval);
-
-        if (retrievalTimeoutMs > 500) {
-          // Complementary retrieval bounded to 3500ms and remaining overall deadline
-          const retrievalPromise = this.retrievalService.search(
-            cleanOwner,
-            cleanRepo,
-            { query: searchQuery, limit: 3, pathPrefix: cleanTarget || undefined },
-            analysisId
-          );
-
-          const retrievalTimeout = new Promise<null>((resolve) => {
-            const timer = setTimeout(() => resolve(null), retrievalTimeoutMs);
-            if (typeof timer.unref === 'function') timer.unref();
-            if (signal) {
-              signal.addEventListener(
-                'abort',
-                () => {
-                  clearTimeout(timer);
-                  resolve(null);
-                },
-                { once: true }
-              );
-            }
-          });
-
-          const searchRes = await Promise.race([retrievalPromise, retrievalTimeout]);
-          if (searchRes && searchRes.results && searchRes.results.length > 0) {
-            retrievedChunks = searchRes.results.map((r) => ({
-              filePath: r.filePath,
-              startLine: r.startLine,
-              endLine: r.endLine,
-              content: r.content,
-            }));
-          }
-        }
-      } catch {
-        // Retrieval is complementary; continue gracefully on any error
-      }
-    }
-
-    if (signal?.aborted) {
-      throw new Error('AI explanation request was aborted.');
-    }
-
-    // 5. Build prompt-injection-safe bounded context
+    // 4. Build prompt-injection-safe bounded context using deterministic repository facts
     const groundedContext = ContextBuilder.build({
       analysis,
       topic: cleanTopic,
       target: cleanTarget,
       readmeExcerpt,
-      retrievedChunks,
     });
 
     if (signal?.aborted) {
@@ -210,9 +150,11 @@ export class AIService {
           .delete(aiExplanations)
           .where(
             and(
-              eq(aiExplanations.analysisId, analysisId),
+              eq(aiExplanations.repositoryId, repositoryId),
+              eq(aiExplanations.commitSha, commitSha),
               eq(aiExplanations.topic, cleanTopic),
-              targetFilter
+              targetFilter,
+              eq(aiExplanations.promptVersion, promptVersion)
             )
           );
       }
@@ -220,9 +162,13 @@ export class AIService {
       await db
         .insert(aiExplanations)
         .values({
+          repositoryId,
           analysisId,
+          commitSha,
           topic: cleanTopic,
           target: cleanTarget,
+          promptVersion,
+          status: 'ready',
           summary: result.summary,
           explanation: result.explanation,
           keyTakeaways: result.keyTakeaways,
