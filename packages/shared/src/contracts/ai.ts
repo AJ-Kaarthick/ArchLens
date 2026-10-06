@@ -49,3 +49,26 @@ export const AIExplanationResultSchema = z.object({
   evidence: z.array(EvidenceCitationSchema).default([]),
 });
 export type AIExplanationResultData = z.infer<typeof AIExplanationResultSchema>;
+
+export const InsightStatusSchema = z.enum(['ready', 'pending', 'failed', 'disabled']);
+export type InsightStatus = z.infer<typeof InsightStatusSchema>;
+
+export const InsightResponseSchema = z.object({
+  status: InsightStatusSchema,
+  topic: ExplainTopicSchema,
+  target: z.string().nullable().optional(),
+  result: ExplainResponseSchema.nullable().optional(),
+  retryAt: z.string().nullable().optional(),
+  isStale: z.boolean().default(false),
+  error: z
+    .object({
+      error: z.string(),
+      message: z.string(),
+      isRateLimit: z.boolean().default(false),
+      suggestedAction: z.string().nullable().default(null),
+    })
+    .nullable()
+    .optional(),
+  promptVersion: z.number().default(1),
+});
+export type InsightResponse = z.infer<typeof InsightResponseSchema>;

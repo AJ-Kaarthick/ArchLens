@@ -1,230 +1,177 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { ExplainTopic, ExplainResponse, ApiError } from '@archlens/shared';
+import type { ExplainTopic, ExplainResponse, InsightResponse } from '@archlens/shared';
 
-describe('AI Insights Request Lifecycle & UX Lock', () => {
+describe('AI Insights Asynchronous Lifecycle & Non-Blocking UX', () => {
   interface TopicState {
-    status: 'idle' | 'loading' | 'success' | 'error';
+    status: 'idle' | 'pending' | 'ready' | 'failed' | 'disabled';
     data: ExplainResponse | null;
-    error: ApiError | null;
-    progressStep: 'analyzing' | 'synthesizing';
+    isStale: boolean;
+    error: {
+      error: string;
+      message: string;
+      isRateLimit?: boolean;
+      suggestedAction?: string | null;
+    } | null;
+    retryAt: string | null;
   }
 
   const INITIAL_TOPIC_STATES: Record<ExplainTopic, TopicState> = {
-    overview: { status: 'idle', data: null, error: null, progressStep: 'analyzing' },
-    architecture: { status: 'idle', data: null, error: null, progressStep: 'analyzing' },
-    'tech-stack': { status: 'idle', data: null, error: null, progressStep: 'analyzing' },
-    entrypoints: { status: 'idle', data: null, error: null, progressStep: 'analyzing' },
+    overview: { status: 'idle', data: null, isStale: false, error: null, retryAt: null },
+    architecture: { status: 'idle', data: null, isStale: false, error: null, retryAt: null },
+    'tech-stack': { status: 'idle', data: null, isStale: false, error: null, retryAt: null },
+    entrypoints: { status: 'idle', data: null, isStale: false, error: null, retryAt: null },
   };
 
   it('INITIAL_TOPIC_STATES starts in idle state for all four topics', () => {
     for (const [, state] of Object.entries(INITIAL_TOPIC_STATES)) {
       expect(state.status).toBe('idle');
       expect(state.data).toBeNull();
+      expect(state.isStale).toBe(false);
       expect(state.error).toBeNull();
+      expect(state.retryAt).toBeNull();
     }
   });
 
-  it('UX Lock: isGenerating is true whenever any topic is in loading state', () => {
+  it('Non-blocking UX: User can switch topics freely while background insight is pending', () => {
     let topicStates = { ...INITIAL_TOPIC_STATES };
-    const getIsGenerating = () => Object.values(topicStates).some((s) => s.status === 'loading');
 
-    expect(getIsGenerating()).toBe(false);
-
-    // Start loading overview
+    // Overview begins generating in background
     topicStates = {
       ...topicStates,
-      overview: { ...topicStates.overview, status: 'loading' },
+      overview: { ...topicStates.overview, status: 'pending' },
     };
-    expect(getIsGenerating()).toBe(true);
+    expect(topicStates.overview.status).toBe('pending');
 
-    // While generating, topic change must be blocked
-    const handleTopicChange = vi.fn((_newTopic: ExplainTopic) => {
-      if (getIsGenerating()) return false;
-      return true;
+    // User switches to architecture without being blocked
+    const handleTopicChange = vi.fn((newTopic: ExplainTopic) => {
+      // Non-blocking: switching tabs is always allowed
+      return newTopic;
     });
 
-    expect(handleTopicChange('architecture')).toBe(false);
-    expect(handleTopicChange('tech-stack')).toBe(false);
-
-    // Finish overview with success
-    topicStates = {
-      ...topicStates,
-      overview: {
-        ...topicStates.overview,
-        status: 'success',
-        data: {
-          topic: 'overview',
-          target: null,
-          summary: 'Overview text',
-          explanation: 'Deep explanation',
-          keyTakeaways: [],
-          evidence: [],
-          generatedAt: new Date().toISOString(),
-          provider: 'gemini',
-          model: 'gemini-3.8-flash',
-          cached: false,
-        },
-      },
-    };
-    expect(getIsGenerating()).toBe(false);
-
-    // Now topic change is re-enabled
-    expect(handleTopicChange('architecture')).toBe(true);
+    expect(handleTopicChange('architecture')).toBe('architecture');
+    expect(handleTopicChange('tech-stack')).toBe('tech-stack');
   });
 
-  it('Abort recovery: aborted request resets status from loading to idle (no infinite hang)', () => {
-    let topicStates = { ...INITIAL_TOPIC_STATES };
-
-    // Request starts
-    topicStates = {
-      ...topicStates,
-      overview: { ...topicStates.overview, status: 'loading' },
-    };
-    expect(topicStates.overview.status).toBe('loading');
-
-    // Abort occurs (e.g. unmount or navigation)
-    const err = new Error('The user aborted a request.');
-    err.name = 'AbortError';
-
-    if (err.name === 'AbortError') {
-      topicStates = {
-        ...topicStates,
-        overview: {
-          ...topicStates.overview,
-          status: topicStates.overview.data ? 'success' : 'idle',
-        },
-      };
-    }
-
-    // Must NOT stay in loading!
-    expect(topicStates.overview.status).toBe('idle');
-  });
-
-  it('Abort recovery with existing cached data retains success status', () => {
-    const existingData: ExplainResponse = {
+  it('Stale fallback: pending state preserves older snapshot with isStale=true', () => {
+    const olderData: ExplainResponse = {
       topic: 'overview',
       target: null,
-      summary: 'Overview text',
-      explanation: 'Deep explanation',
-      keyTakeaways: [],
+      summary: 'Older commit overview',
+      explanation: 'Detailed previous explanation',
+      keyTakeaways: ['Legacy pattern'],
       evidence: [],
-      generatedAt: new Date().toISOString(),
+      generatedAt: new Date(Date.now() - 3600_000).toISOString(),
       provider: 'gemini',
       model: 'gemini-3.8-flash',
-      cached: false,
+      cached: true,
     };
 
-    let topicStates: Record<ExplainTopic, TopicState> = {
+    let topicStates = {
       ...INITIAL_TOPIC_STATES,
       overview: {
-        status: 'loading',
-        data: existingData,
+        status: 'pending' as const,
+        data: olderData,
+        isStale: true,
         error: null,
-        progressStep: 'analyzing',
+        retryAt: null,
       },
     };
 
-    // User refreshed, but request was aborted
-    const err = new Error('Aborted');
-    err.name = 'AbortError';
-
-    if (err.name === 'AbortError') {
-      topicStates = {
-        ...topicStates,
-        overview: {
-          ...topicStates.overview,
-          status: topicStates.overview.data ? 'success' : 'idle',
-        },
-      };
-    }
-
-    // Reverts to success, keeping the previously loaded data
-    expect(topicStates.overview.status).toBe('success');
-    expect(topicStates.overview.data).toEqual(existingData);
+    expect(topicStates.overview.status).toBe('pending');
+    expect(topicStates.overview.isStale).toBe(true);
+    expect(topicStates.overview.data).toEqual(olderData);
   });
 
-  it('ClientClosedRequest (499) resets loading status without displaying error', () => {
+  it('Disabled state: gracefully sets disabled status when AI is not configured', () => {
+    const disabledResponse: InsightResponse = {
+      status: 'disabled',
+      topic: 'overview',
+      target: null,
+      isStale: false,
+      promptVersion: 1,
+    };
+
     let topicStates = { ...INITIAL_TOPIC_STATES };
     topicStates = {
       ...topicStates,
-      architecture: { ...topicStates.architecture, status: 'loading' },
+      overview: {
+        status: disabledResponse.status,
+        data: null,
+        isStale: disabledResponse.isStale,
+        error: null,
+        retryAt: null,
+      },
     };
 
-    const resStatus = 499;
-    const apiError = { error: 'ClientClosedRequest', message: 'Cancelled', isRateLimit: false };
-
-    if (resStatus === 499 || apiError.error === 'ClientClosedRequest') {
-      topicStates = {
-        ...topicStates,
-        architecture: {
-          ...topicStates.architecture,
-          status: topicStates.architecture.data ? 'success' : 'idle',
-        },
-      };
-    }
-
-    expect(topicStates.architecture.status).toBe('idle');
-    expect(topicStates.architecture.error).toBeNull();
+    expect(topicStates.overview.status).toBe('disabled');
+    expect(topicStates.overview.data).toBeNull();
   });
 
-  it('FastAPI Regression: Repo sync effect reliably dispatches /explain and cleans up on unmount', async () => {
+  it('FastAPI Integration: Dispatches GET /insights/overview and cleans up controllers on unmount', async () => {
+    const mockInsightResponse: InsightResponse = {
+      status: 'ready',
+      topic: 'overview',
+      target: null,
+      result: {
+        topic: 'overview',
+        target: null,
+        summary: 'FastAPI repository overview',
+        explanation: 'FastAPI is a modern, high-performance web framework for Python.',
+        keyTakeaways: ['High performance', 'Easy to learn', 'Fast to code'],
+        evidence: [
+          {
+            type: 'manifest',
+            label: 'pyproject.toml',
+            reference: 'pyproject.toml',
+            description: 'FastAPI package configuration',
+          },
+        ],
+        generatedAt: new Date().toISOString(),
+        provider: 'gemini',
+        model: 'gemini-3.8-flash',
+        cached: false,
+      },
+      isStale: false,
+      promptVersion: 1,
+    };
+
     const mockFetch = vi.fn().mockImplementation((_url, _init) => {
       return Promise.resolve({
         ok: true,
         status: 200,
-        json: () =>
-          Promise.resolve({
-            topic: 'overview',
-            target: null,
-            summary: 'FastAPI repository overview',
-            explanation: 'FastAPI is a modern, high-performance web framework for Python.',
-            keyTakeaways: ['High performance', 'Easy to learn', 'Fast to code'],
-            evidence: [
-              {
-                type: 'manifest',
-                label: 'pyproject.toml',
-                reference: 'pyproject.toml',
-                description: 'FastAPI package configuration',
-              },
-            ],
-            generatedAt: new Date().toISOString(),
-            provider: 'gemini',
-            model: 'gemini-3.8-flash',
-            cached: false,
-          }),
+        json: () => Promise.resolve(mockInsightResponse),
       });
     });
 
-    // Simulate the exact lifecycle of AIInsightsView mounting for fastapi/fastapi
     const controllers = new Map<string, AbortController>();
+    const timers = new Map<string, any>();
 
-    const fetchExplanation = async (topic: string) => {
+    const fetchInsight = async (topic: string) => {
       const controller = new AbortController();
       controllers.set(topic, controller);
 
-      const res = await mockFetch(`/api/repositories/fastapi/fastapi/explain`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic }),
+      const res = await mockFetch(`/api/repositories/tiangolo/fastapi/insights/${topic}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
         signal: controller.signal,
       });
       return res.json();
     };
 
-    // Effect setup
-    const data = await fetchExplanation('overview');
+    const data = await fetchInsight('overview');
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(
-      '/api/repositories/fastapi/fastapi/explain',
+      '/api/repositories/tiangolo/fastapi/insights/overview',
       expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ topic: 'overview' }),
+        method: 'GET',
       })
     );
-    expect(data.summary).toContain('FastAPI');
+    expect(data.status).toBe('ready');
+    expect(data.result.summary).toContain('FastAPI');
 
-    // Effect cleanup
+    // Simulate cleanup on unmount
     controllers.forEach((ctrl) => ctrl.abort());
+    timers.forEach((t) => clearTimeout(t));
     expect(controllers.get('overview')?.signal.aborted).toBe(true);
   });
 });

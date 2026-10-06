@@ -22,6 +22,16 @@ export interface ProviderFactoryOptions {
 }
 
 export class AIProviderFactory {
+  static isConfigured(): boolean {
+    if (process.env.AI_DISABLED === 'true' || process.env.AI_PROVIDER === 'none') {
+      return false;
+    }
+    if (process.env.AI_PROVIDER === 'mock') {
+      return true;
+    }
+    return Boolean(process.env.GEMINI_API_KEY);
+  }
+
   static create(options: ProviderFactoryOptions = {}): IAIProvider {
     const requestedType = options.providerType || process.env.AI_PROVIDER;
 

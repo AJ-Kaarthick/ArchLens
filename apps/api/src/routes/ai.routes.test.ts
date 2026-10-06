@@ -5,7 +5,7 @@ import {
   AIRateLimitError,
   AITemporaryUnavailableError,
 } from '../services/ai/provider.interface.js';
-import type { ExplainResponse } from '@archlens/shared';
+import type { ExplainResponse, InsightResponse } from '@archlens/shared';
 
 describe('AI Fastify Routes', () => {
   const mockResponse: ExplainResponse = {
@@ -269,5 +269,156 @@ describe('AI Fastify Routes', () => {
     const body = JSON.parse(response.body);
     expect(body.error).toBe('ClientClosedRequest');
     expect(body.message).toBe('AI explanation request was cancelled.');
+  });
+
+  describe('GET /api/repositories/:owner/:repo/insights/:topic', () => {
+    it('returns 200 and InsightResponse when insight is ready', async () => {
+      const mockInsight: InsightResponse = {
+        status: 'ready',
+        topic: 'overview',
+        target: null,
+        result: mockResponse,
+        isStale: false,
+        promptVersion: 1,
+      };
+      const mockAiService = {
+        getOrEnqueueInsight: vi.fn().mockResolvedValue(mockInsight),
+      } as unknown as AIService;
+
+      const app = buildApp({ aiService: mockAiService });
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/repositories/facebook/react/insights/overview',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.status).toBe('ready');
+      expect(body.result.summary).toBe('Mock repository summary');
+      expect(mockAiService.getOrEnqueueInsight).toHaveBeenCalledWith(
+        'facebook',
+        'react',
+        'overview',
+        null,
+        1,
+        false
+      );
+    });
+
+    it('returns 200 with pending status when generation is queued or running', async () => {
+      const mockInsight: InsightResponse = {
+        status: 'pending',
+        topic: 'architecture',
+        target: null,
+        result: null,
+        isStale: false,
+        promptVersion: 1,
+      };
+      const mockAiService = {
+        getOrEnqueueInsight: vi.fn().mockResolvedValue(mockInsight),
+      } as unknown as AIService;
+
+      const app = buildApp({ aiService: mockAiService });
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/repositories/facebook/react/insights/architecture',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.status).toBe('pending');
+      expect(body.isStale).toBe(false);
+    });
+
+    it('returns 200 with disabled status when AI provider is not configured', async () => {
+      const mockInsight: InsightResponse = {
+        status: 'disabled',
+        topic: 'tech-stack',
+        target: null,
+        result: null,
+        isStale: false,
+        promptVersion: 1,
+      };
+      const mockAiService = {
+        getOrEnqueueInsight: vi.fn().mockResolvedValue(mockInsight),
+      } as unknown as AIService;
+
+      const app = buildApp({ aiService: mockAiService });
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/repositories/facebook/react/insights/tech-stack',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.status).toBe('disabled');
+    });
+
+    it('returns 400 for invalid topic', async () => {
+      const mockAiService = {
+        getOrEnqueueInsight: vi.fn(),
+      } as unknown as AIService;
+
+      const app = buildApp({ aiService: mockAiService });
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/repositories/facebook/react/insights/invalid-topic',
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('ValidationError');
+    });
+
+    it('returns 404 when repository has not been analyzed yet', async () => {
+      const mockAiService = {
+        getOrEnqueueInsight: vi.fn().mockRejectedValue(new RepositoryNotAnalyzedError('test', 'repo')),
+      } as unknown as AIService;
+
+      const app = buildApp({ aiService: mockAiService });
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/repositories/test/repo/insights/overview',
+      });
+
+      expect(response.statusCode).toBe(404);
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('RepositoryNotAnalyzed');
+    });
+  });
+
+  describe('POST /api/repositories/:owner/:repo/insights/:topic/retry', () => {
+    it('returns 200 and invokes getOrEnqueueInsight with forceRetry=true', async () => {
+      const mockInsight: InsightResponse = {
+        status: 'pending',
+        topic: 'overview',
+        target: null,
+        result: null,
+        isStale: false,
+        promptVersion: 1,
+      };
+      const mockAiService = {
+        getOrEnqueueInsight: vi.fn().mockResolvedValue(mockInsight),
+      } as unknown as AIService;
+
+      const app = buildApp({ aiService: mockAiService });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/repositories/facebook/react/insights/overview/retry',
+        payload: {},
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body);
+      expect(body.status).toBe('pending');
+      expect(mockAiService.getOrEnqueueInsight).toHaveBeenCalledWith(
+        'facebook',
+        'react',
+        'overview',
+        null,
+        1,
+        true
+      );
+    });
   });
 });

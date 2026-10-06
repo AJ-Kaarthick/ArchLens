@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { ExplainRequestSchema, type ApiError } from '@archlens/shared';
+import { ExplainRequestSchema, ExplainTopicSchema, type ApiError } from '@archlens/shared';
 import { aiService, AIService, RepositoryNotAnalyzedError } from '../services/ai/ai.service.js';
 import {
   AIRateLimitError,
@@ -215,5 +215,140 @@ export function createAiRoutes(
         request.raw.socket?.removeListener('close', onClientClose);
       }
     });
+
+    // GET /api/repositories/:owner/:repo/insights/:topic
+    fastify.get(
+      '/api/repositories/:owner/:repo/insights/:topic',
+      async (request, reply) => {
+        const { owner, repo, topic } = request.params as {
+          owner: string;
+          repo: string;
+          topic: string;
+        };
+
+        if (!owner || !repo || !topic) {
+          const errorResponse: ApiError = {
+            error: 'ValidationError',
+            message: 'owner, repo, and topic path parameters are required.',
+            isRateLimit: false,
+            suggestedAction: 'Ensure URL matches /api/repositories/:owner/:repo/insights/:topic',
+          };
+          return reply.status(400).send(errorResponse);
+        }
+
+        const validTopic = ExplainTopicSchema.safeParse(topic);
+        if (!validTopic.success) {
+          const errorResponse: ApiError = {
+            error: 'ValidationError',
+            message: `Invalid topic '${topic}'.`,
+            isRateLimit: false,
+            suggestedAction:
+              "Valid topics are 'overview', 'architecture', 'tech-stack', 'entrypoints'.",
+          };
+          return reply.status(400).send(errorResponse);
+        }
+
+        const query = (request.query as {
+          target?: string;
+          promptVersion?: string;
+          forceRetry?: string;
+        }) || {};
+        const target = query.target || null;
+        const promptVersion = query.promptVersion ? parseInt(query.promptVersion, 10) || 1 : 1;
+        const forceRetry = query.forceRetry === 'true';
+
+        try {
+          const response = await service.getOrEnqueueInsight(
+            owner,
+            repo,
+            validTopic.data,
+            target,
+            promptVersion,
+            forceRetry
+          );
+          return reply.status(200).send(response);
+        } catch (err: unknown) {
+          if (err instanceof RepositoryNotAnalyzedError) {
+            const errorResponse: ApiError = {
+              error: 'RepositoryNotAnalyzed',
+              message: err.message,
+              isRateLimit: false,
+              suggestedAction:
+                'Run POST /api/analyze for this repository before requesting AI insights.',
+            };
+            return reply.status(404).send(errorResponse);
+          }
+
+          fastify.log.error(err);
+          const errorResponse: ApiError = {
+            error: 'AIInsightError',
+            message: 'An internal error occurred while resolving AI insights.',
+            isRateLimit: false,
+            suggestedAction: 'Please try again shortly or inspect server logs for details.',
+          };
+          return reply.status(500).send(errorResponse);
+        }
+      }
+    );
+
+    // POST /api/repositories/:owner/:repo/insights/:topic/retry
+    fastify.post(
+      '/api/repositories/:owner/:repo/insights/:topic/retry',
+      async (request, reply) => {
+        const { owner, repo, topic } = request.params as {
+          owner: string;
+          repo: string;
+          topic: string;
+        };
+
+        const validTopic = ExplainTopicSchema.safeParse(topic);
+        if (!validTopic.success) {
+          const errorResponse: ApiError = {
+            error: 'ValidationError',
+            message: `Invalid topic '${topic}'.`,
+            isRateLimit: false,
+            suggestedAction:
+              "Valid topics are 'overview', 'architecture', 'tech-stack', 'entrypoints'.",
+          };
+          return reply.status(400).send(errorResponse);
+        }
+
+        const body = (request.body as { target?: string; promptVersion?: number }) || {};
+        const target = body.target || null;
+        const promptVersion = body.promptVersion || 1;
+
+        try {
+          const response = await service.getOrEnqueueInsight(
+            owner,
+            repo,
+            validTopic.data,
+            target,
+            promptVersion,
+            true
+          );
+          return reply.status(200).send(response);
+        } catch (err: unknown) {
+          if (err instanceof RepositoryNotAnalyzedError) {
+            const errorResponse: ApiError = {
+              error: 'RepositoryNotAnalyzed',
+              message: err.message,
+              isRateLimit: false,
+              suggestedAction:
+                'Run POST /api/analyze for this repository before requesting AI insights.',
+            };
+            return reply.status(404).send(errorResponse);
+          }
+
+          fastify.log.error(err);
+          const errorResponse: ApiError = {
+            error: 'AIInsightError',
+            message: 'An internal error occurred while retrying AI insight.',
+            isRateLimit: false,
+            suggestedAction: 'Please try again shortly.',
+          };
+          return reply.status(500).send(errorResponse);
+        }
+      }
+    );
   };
 }
