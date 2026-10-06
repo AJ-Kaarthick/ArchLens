@@ -123,8 +123,13 @@ export class RetrievalService {
               AND file_path = ${chunk.filePath}
               AND chunk_index = ${chunk.chunkIndex};
           `;
-        } catch {
-          // Graceful fallback if vector column update fails
+        } catch (err: unknown) {
+          // Graceful fallback with structured diagnostic warning if vector column update fails
+          console.warn(
+            `[RetrievalService] Failed to update pgvector column for ${chunk.filePath}#${chunk.chunkIndex}: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
         }
       }
     }
@@ -140,7 +145,7 @@ export class RetrievalService {
     repo: string,
     analysisId: number,
     options?: { force?: boolean }
-  ): Promise<{ indexedChunks: number }> {
+  ): Promise<{ indexedChunks: number; failedFetches?: number }> {
     const analysisRow = await db.query.analyses.findFirst({
       where: eq(analyses.id, analysisId),
     });
@@ -171,6 +176,7 @@ export class RetrievalService {
     }
 
     const filesToChunk: ChunkInputFile[] = [];
+    const fetchFailures: { path: string; error: string }[] = [];
 
     for (const path of candidatePaths) {
       try {
@@ -194,12 +200,27 @@ export class RetrievalService {
             language: treeItem?.extension || null,
           });
         }
-      } catch {
-        // Continue if single landmark fetch fails
+      } catch (err: unknown) {
+        // Collect failure diagnostics; continue gracefully so partial repo issues don't crash indexing
+        fetchFailures.push({
+          path,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
-    return this.indexFiles(analysisId, filesToChunk, options);
+    if (fetchFailures.length > 0) {
+      const summary = fetchFailures.slice(0, 5).map((f) => `${f.path} (${f.error})`).join('; ');
+      console.warn(
+        `[RetrievalService] Notice: ${fetchFailures.length}/${candidatePaths.size} files failed to fetch during indexing of ${owner}/${repo}: ${summary}`
+      );
+    }
+
+    const result = await this.indexFiles(analysisId, filesToChunk, options);
+    return {
+      indexedChunks: result.indexedChunks,
+      failedFetches: fetchFailures.length,
+    };
   }
 
   /**

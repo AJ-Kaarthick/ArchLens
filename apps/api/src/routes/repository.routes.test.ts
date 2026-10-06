@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { buildApp } from '../server.js';
 import { RepositoryService } from '../services/repository.service.js';
-import { GitHubRateLimitError } from '../services/github.service.js';
+import {
+  GitHubRateLimitError,
+  GitHubPrivateRepositoryError,
+  GitHubTimeoutError,
+} from '../services/github.service.js';
 import type { AnalysisResult, LandmarkContent } from '@archlens/shared';
 
 describe('Repository Fastify Routes', () => {
@@ -248,5 +252,73 @@ describe('Repository Fastify Routes', () => {
     expect(res.statusCode).toBe(404);
     const body = JSON.parse(res.body);
     expect(body.error).toBe('NotFound');
+  });
+
+  it('POST /api/analyze returns 403 PrivateRepositoryNotSupported for private repositories', async () => {
+    const mockService = {
+      analyze: vi
+        .fn()
+        .mockRejectedValue(new GitHubPrivateRepositoryError('corp', 'secret-repo')),
+      getLatestAnalysis: vi.fn(),
+      getLandmarkContent: vi.fn(),
+    } as unknown as RepositoryService;
+
+    const app = buildApp({ logger: false, repositoryService: mockService });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/analyze',
+      payload: { url: 'corp/secret-repo' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    const body = JSON.parse(res.body);
+    expect(body.error).toBe('PrivateRepositoryNotSupported');
+    expect(body.message).toContain('private');
+    expect(body.suggestedAction).toContain('public');
+  });
+
+  it('POST /api/analyze returns 504 GatewayTimeout when GitHub fetch times out', async () => {
+    const mockService = {
+      analyze: vi
+        .fn()
+        .mockRejectedValue(new GitHubTimeoutError('/repos/owner/repo', 10000)),
+      getLatestAnalysis: vi.fn(),
+      getLandmarkContent: vi.fn(),
+    } as unknown as RepositoryService;
+
+    const app = buildApp({ logger: false, repositoryService: mockService });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/analyze',
+      payload: { url: 'owner/repo' },
+    });
+
+    expect(res.statusCode).toBe(504);
+    const body = JSON.parse(res.body);
+    expect(body.error).toBe('GatewayTimeout');
+    expect(body.message).toContain('timed out');
+  });
+
+  it('GET /api/repositories/:owner/:repo/landmark-content returns 403 on private repository', async () => {
+    const mockService = {
+      analyze: vi.fn(),
+      getLatestAnalysis: vi.fn(),
+      getLandmarkContent: vi
+        .fn()
+        .mockRejectedValue(new GitHubPrivateRepositoryError('corp', 'private-repo')),
+    } as unknown as RepositoryService;
+
+    const app = buildApp({ logger: false, repositoryService: mockService });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/repositories/corp/private-repo/landmark-content?path=README.md',
+    });
+
+    expect(res.statusCode).toBe(403);
+    const body = JSON.parse(res.body);
+    expect(body.error).toBe('PrivateRepositoryNotSupported');
   });
 });

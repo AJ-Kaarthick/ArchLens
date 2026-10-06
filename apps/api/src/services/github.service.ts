@@ -25,6 +25,24 @@ export class GitHubNotFoundError extends Error {
   }
 }
 
+export class GitHubPrivateRepositoryError extends Error {
+  readonly isPrivate = true;
+  constructor(owner: string, repo: string) {
+    super(
+      `GitHub repository '${owner}/${repo}' is private. ArchLens currently supports public repositories only.`
+    );
+    this.name = 'GitHubPrivateRepositoryError';
+  }
+}
+
+export class GitHubTimeoutError extends Error {
+  readonly isTimeout = true;
+  constructor(endpoint: string, timeoutMs: number) {
+    super(`GitHub request to '${endpoint}' timed out after ${timeoutMs}ms.`);
+    this.name = 'GitHubTimeoutError';
+  }
+}
+
 export class GitHubTreeTooLargeError extends Error {
   readonly tooLarge = true;
   constructor(count: number, max: number) {
@@ -106,27 +124,68 @@ export class GitHubService {
     throw new GitHubRateLimitError(parsedMsg, resetDate);
   }
 
-  private async fetchGitHub(endpoint: string): Promise<Response> {
+  private async fetchGitHub(
+    endpoint: string,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {}
+  ): Promise<Response> {
     const url = endpoint.startsWith('http') ? endpoint : `${this.baseUrl}${endpoint}`;
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: this.getHeaders(),
-    });
+    const timeoutMs = options.timeoutMs ?? 10000;
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => {
+      timeoutController.abort(new GitHubTimeoutError(endpoint, timeoutMs));
+    }, timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
 
-    if (res.status === 403 || res.status === 429) {
-      const remaining = res.headers.get('x-ratelimit-remaining');
-      const text = await res.text();
-      if (remaining === '0' || text.toLowerCase().includes('rate limit')) {
-        this.handleRateLimit(res, text);
+    let combinedSignal: AbortSignal;
+    if (options.signal) {
+      if ('any' in AbortSignal && typeof (AbortSignal as any).any === 'function') {
+        combinedSignal = (AbortSignal as any).any([options.signal, timeoutController.signal]);
+      } else {
+        const callerSignal = options.signal;
+        callerSignal.addEventListener(
+          'abort',
+          () => timeoutController.abort(callerSignal.reason),
+          { once: true }
+        );
+        combinedSignal = timeoutController.signal;
       }
-      throw new GitHubApiError(`GitHub API error (${res.status}): ${text}`, res.status);
+    } else {
+      combinedSignal = timeoutController.signal;
     }
 
-    return res;
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: this.getHeaders(),
+        signal: combinedSignal,
+      });
+
+      if (res.status === 403 || res.status === 429) {
+        const remaining = res.headers.get('x-ratelimit-remaining');
+        const text = await res.text();
+        if (remaining === '0' || text.toLowerCase().includes('rate limit')) {
+          this.handleRateLimit(res, text);
+        }
+        throw new GitHubApiError(`GitHub API error (${res.status}): ${text}`, res.status);
+      }
+
+      return res;
+    } catch (err: unknown) {
+      if (timeoutController.signal.aborted && !options.signal?.aborted) {
+        throw new GitHubTimeoutError(endpoint, timeoutMs);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  async getRepositoryMetadata(owner: string, repo: string): Promise<RepositoryMetadata> {
-    const res = await this.fetchGitHub(`/repos/${owner}/${repo}`);
+  async getRepositoryMetadata(
+    owner: string,
+    repo: string,
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ): Promise<RepositoryMetadata> {
+    const res = await this.fetchGitHub(`/repos/${owner}/${repo}`, options);
 
     if (res.status === 404) {
       throw new GitHubNotFoundError(owner, repo);
@@ -141,6 +200,9 @@ export class GitHubService {
     }
 
     const data = (await res.json()) as any;
+    if (data.private) {
+      throw new GitHubPrivateRepositoryError(owner, repo);
+    }
     return {
       id: String(data.id),
       owner: data.owner?.login || owner,
@@ -230,10 +292,17 @@ export class GitHubService {
     } else if (typeof data.content === 'string') {
       content = data.content;
     } else if (data.download_url) {
-      // Fallback: fetch raw if content not returned directly
-      const rawRes = await fetch(data.download_url);
-      if (rawRes.ok) {
-        content = await rawRes.text();
+      // Fallback: fetch raw if content not returned directly with bounded timeout
+      const fallbackController = new AbortController();
+      const timer = setTimeout(() => fallbackController.abort(), 10000);
+      if (typeof timer.unref === 'function') timer.unref();
+      try {
+        const rawRes = await fetch(data.download_url, { signal: fallbackController.signal });
+        if (rawRes.ok) {
+          content = await rawRes.text();
+        }
+      } finally {
+        clearTimeout(timer);
       }
     }
 

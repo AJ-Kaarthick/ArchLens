@@ -31,6 +31,12 @@ export class AITemporaryUnavailableError extends Error {
   }
 }
 
+export interface ProviderLogger {
+  info(obj: Record<string, unknown>, msg?: string): void;
+  warn(obj: Record<string, unknown>, msg?: string): void;
+  error(obj: Record<string, unknown>, msg?: string): void;
+}
+
 export interface AIExplanationRequest {
   topic: ExplainTopic;
   target?: string | null;
@@ -39,6 +45,7 @@ export interface AIExplanationRequest {
   analysis?: AnalysisResult;
   signal?: AbortSignal;
   deadlineMs?: number;
+  logger?: ProviderLogger;
 }
 
 export interface AIExplanationResult {

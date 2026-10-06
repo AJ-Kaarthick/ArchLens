@@ -74,7 +74,8 @@ export function createAiRoutes(
             owner,
             repo,
             parsedRequest,
-            clientAbortController.signal
+            clientAbortController.signal,
+            request.log
           );
           request.log.info(
             {

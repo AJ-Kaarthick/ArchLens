@@ -1,4 +1,4 @@
-import type { IAIProvider } from './provider.interface.js';
+import type { IAIProvider, ProviderLogger } from './provider.interface.js';
 import { MockAIProvider } from './providers/mock.provider.js';
 import { GeminiAIProvider } from './providers/gemini.provider.js';
 
@@ -18,6 +18,7 @@ export interface ProviderFactoryOptions {
   maxBackoffMs?: number;
   backoffFactor?: number;
   sleepFn?: (ms: number) => Promise<void>;
+  logger?: ProviderLogger;
 }
 
 export class AIProviderFactory {
@@ -56,6 +57,7 @@ export class AIProviderFactory {
         maxBackoffMs: options.maxBackoffMs,
         backoffFactor: options.backoffFactor,
         sleepFn: options.sleepFn,
+        logger: options.logger,
       });
     }
 
@@ -76,6 +78,7 @@ export class AIProviderFactory {
         maxBackoffMs: options.maxBackoffMs,
         backoffFactor: options.backoffFactor,
         sleepFn: options.sleepFn,
+        logger: options.logger,
       });
     }
 

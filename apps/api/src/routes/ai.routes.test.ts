@@ -53,7 +53,8 @@ describe('AI Fastify Routes', () => {
       expect.objectContaining({
         topic: 'overview',
       }),
-      expect.any(Object)
+      expect.any(Object),
+      expect.anything()
     );
   });
 
@@ -77,7 +78,8 @@ describe('AI Fastify Routes', () => {
       expect.objectContaining({
         topic: 'overview',
       }),
-      expect.any(Object)
+      expect.any(Object),
+      expect.anything()
     );
   });
 

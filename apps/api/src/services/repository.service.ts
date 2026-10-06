@@ -48,8 +48,13 @@ export class RepositoryService {
           if (!file.isTruncated) {
             manifestContents[item.path] = file.content;
           }
-        } catch {
-          // Non-critical: continue even if a specific manifest fails to load
+        } catch (err: unknown) {
+          // Non-critical: log diagnostic and continue even if a specific manifest fails to load
+          console.warn(
+            `[RepositoryService] Optional manifest '${item.path}' failed to load for ${cleanOwner}/${cleanRepo}: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
         }
       }
     }
@@ -191,6 +196,12 @@ export class RepositoryService {
     // Path traversal check
     if (cleanPath.includes('..')) {
       throw new Error('Invalid path: directory traversal is not allowed.');
+    }
+
+    // Ensure repository exists and is public (rejects unanalyzed private repos)
+    const record = await this.getLatestAnalysisWithRecord(cleanOwner, cleanRepo);
+    if (!record) {
+      await this.gh.getRepositoryMetadata(cleanOwner, cleanRepo);
     }
 
     return this.gh.getFileContent(cleanOwner, cleanRepo, cleanPath, ref);

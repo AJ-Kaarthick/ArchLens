@@ -7,6 +7,8 @@ import {
   isNonTransientError,
   isTransientError,
   isRateLimitError,
+  extractErrorStatus,
+  classifyGeminiError,
 } from './gemini.provider.js';
 
 const mockInstances: any[] = [];
@@ -624,6 +626,151 @@ describe('GeminiAIProvider', () => {
       expect(isRateLimitError(new Error('RESOURCE_EXHAUSTED'))).toBe(true);
       expect(isRateLimitError(new Error('quota exceeded'))).toBe(true);
       expect(isRateLimitError(new Error('503 Service Unavailable'))).toBe(false);
+    });
+
+    describe('classifyGeminiError and extractErrorStatus', () => {
+      it('never misclassifies duration numbers as HTTP status codes', () => {
+        const timeout4030 = new Error('request timed out after 4030ms');
+        expect(extractErrorStatus(timeout4030).status).toBeUndefined();
+        expect(classifyGeminiError(timeout4030)).toBe('timeout');
+
+        const timeout403 = new Error('request timed out after 403ms');
+        expect(extractErrorStatus(timeout403).status).toBeUndefined();
+        expect(classifyGeminiError(timeout403)).toBe('timeout');
+
+        // Port numbers in error strings
+        const port4001 = new Error('failed connecting to host on port 4001');
+        expect(extractErrorStatus(port4001).status).toBeUndefined();
+        expect(classifyGeminiError(port4001)).toBe('service_unavailable');
+      });
+
+      it('correctly classifies client cancellations as client_cancellation', () => {
+        expect(classifyGeminiError(new DOMException('The operation was aborted', 'AbortError'))).toBe('client_cancellation');
+        expect(classifyGeminiError(new Error('AI explanation request was aborted.'))).toBe('client_cancellation');
+        expect(classifyGeminiError({ code: 'ABORT_ERR', message: 'aborted by caller' })).toBe('client_cancellation');
+      });
+
+      it('correctly classifies structured 401 and 403 as auth_or_permission', () => {
+        expect(classifyGeminiError({ status: 403, message: 'Forbidden' })).toBe('auth_or_permission');
+        expect(classifyGeminiError({ statusCode: 401, message: 'Unauthorized' })).toBe('auth_or_permission');
+        expect(classifyGeminiError({ code: 'PERMISSION_DENIED', message: 'The caller does not have permission' })).toBe('auth_or_permission');
+        expect(classifyGeminiError(new Error('API key not valid. Please pass a valid API key.'))).toBe('auth_or_permission');
+      });
+
+      it('correctly classifies structured 429 and RESOURCE_EXHAUSTED as quota_rate_limit', () => {
+        expect(classifyGeminiError({ status: 429, message: 'Too Many Requests' })).toBe('quota_rate_limit');
+        expect(classifyGeminiError({ code: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded' })).toBe('quota_rate_limit');
+        expect(classifyGeminiError(new Error('Resource has been exhausted (e.g. check quota).'))).toBe('quota_rate_limit');
+      });
+
+      it('correctly classifies 503 and unavailable as service_unavailable', () => {
+        expect(classifyGeminiError({ status: 503, message: 'Service Unavailable' })).toBe('service_unavailable');
+        expect(classifyGeminiError({ code: 'UNAVAILABLE', message: 'The model is overloaded' })).toBe('service_unavailable');
+        expect(classifyGeminiError(new Error('503 Service Unavailable'))).toBe('service_unavailable');
+      });
+
+      it('correctly classifies safety filters as safety_blocked', () => {
+        expect(classifyGeminiError(new Error('Candidate was blocked by safety filters (HARM_CATEGORY_DANGEROUS)'))).toBe('safety_blocked');
+      });
+
+      it('correctly classifies malformed JSON responses as malformed_response', () => {
+        expect(classifyGeminiError(new Error('Failed to parse Gemini output as JSON: { broken ...'))).toBe('malformed_response');
+        expect(classifyGeminiError(new Error('Gemini API returned an empty response'))).toBe('malformed_response');
+      });
+    });
+
+    describe('telemetry and logger integration', () => {
+      it('logs structured telemetry on successful attempt with token usage and finishReason', async () => {
+        const infoLogs: any[] = [];
+        const mockLogger = {
+          info: vi.fn((obj) => infoLogs.push(obj)),
+          warn: vi.fn(),
+          error: vi.fn(),
+        };
+
+        const provider = new GeminiAIProvider({
+          apiKey: 'test-fake-key-logger',
+          logger: mockLogger,
+        });
+
+        mockInstances[0].models.generateContent.mockResolvedValueOnce({
+          text: JSON.stringify(sampleOutput),
+          candidates: [{ finishReason: 'STOP' }],
+          usageMetadata: {
+            promptTokenCount: 1500,
+            candidatesTokenCount: 420,
+            totalTokenCount: 1920,
+          },
+        });
+
+        const result = await provider.explain({
+          topic: 'overview',
+          repoName: 'test/repo',
+          context: 'grounded context',
+        });
+
+        expect(result.summary).toBe(sampleOutput.summary);
+        expect(mockLogger.info).toHaveBeenCalledTimes(1);
+        expect(infoLogs[0]).toMatchObject({
+          event: 'gemini_provider_attempt',
+          provider: 'gemini',
+          tier: 'primary',
+          model: 'gemini-3.8-flash',
+          attempt: 1,
+          httpStatus: 200,
+          finishReason: 'STOP',
+          tokenUsage: {
+            promptTokens: 1500,
+            candidatesTokens: 420,
+            totalTokens: 1920,
+          },
+        });
+        expect(infoLogs[0].latencyMs).toBeGreaterThanOrEqual(0);
+        // Secrets must not be in log object
+        expect(JSON.stringify(infoLogs[0])).not.toContain('test-fake-key-logger');
+      });
+
+      it('logs structured telemetry on failed attempt with error classification and redacted secrets', async () => {
+        const warnLogs: any[] = [];
+        const mockLogger = {
+          info: vi.fn(),
+          warn: vi.fn((obj) => warnLogs.push(obj)),
+          error: vi.fn(),
+        };
+
+        const secretKey = 'SECRET_GEMINI_KEY_999';
+        const provider = new GeminiAIProvider({
+          apiKey: secretKey,
+          logger: mockLogger,
+          maxRetries: 0,
+        });
+
+        mockInstances[0].models.generateContent.mockRejectedValueOnce(
+          new Error(`HTTP 503 Service Unavailable for key ${secretKey}`)
+        );
+
+        await expect(
+          provider.explain({
+            topic: 'overview',
+            repoName: 'test/repo',
+            context: 'grounded context',
+          })
+        ).rejects.toThrow();
+
+        expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+        expect(warnLogs[0]).toMatchObject({
+          event: 'gemini_provider_attempt',
+          provider: 'gemini',
+          tier: 'primary',
+          model: 'gemini-3.8-flash',
+          attempt: 1,
+          httpStatus: 503,
+          errorClass: 'service_unavailable',
+        });
+        expect(warnLogs[0].latencyMs).toBeGreaterThanOrEqual(0);
+        expect(warnLogs[0].errorMessage).toContain('[REDACTED]');
+        expect(warnLogs[0].errorMessage).not.toContain(secretKey);
+      });
     });
   });
 });

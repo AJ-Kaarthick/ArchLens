@@ -413,7 +413,10 @@ Standardized health probes for container orchestration and monitoring:
 
 ## Security
 
-- **No Secret Leakage:** GitHub credentials (`GITHUB_TOKEN`) and AI provider keys (`GEMINI_API_KEY`) are strictly loaded server-side in `apps/api` and are never forwarded to the client or embedded in client bundles.
+- **Host Execution Containment:** The host-process Node execution and live preview subsystem is strictly disabled by default (`ENABLE_UNSAFE_DEV_SANDBOX=false`). Because host-process execution lacks kernel-level sandbox isolation (cgroups, microVMs), it cannot safely execute untrusted or hostile code. Normal product deployments do not expose execution or preview routes. An unsafe development mode is available solely for local testing via `ENABLE_UNSAFE_DEV_SANDBOX=yes`. Arbitrary `inlineCode` submissions are strictly refused.
+- **Public Repository Policy:** ArchLens operates on public repositories only. Private repository ingestion is rejected with typed HTTP 403 `PrivateRepositoryNotSupported` errors to prevent unauthorized access via server-side `GITHUB_TOKEN` credentials.
+- **Trust Proxy & Rate Limiting:** Behind reverse proxies such as Nginx, ArchLens respects trusted private subnets (`TRUST_PROXY`) to isolate client IPs and prevent cross-client rate-limit exhaustion.
+- **No Secret Leakage:** GitHub credentials (`GITHUB_TOKEN`) and AI provider keys (`GEMINI_API_KEY`) are strictly loaded server-side in `apps/api` and are never forwarded to the client or embedded in client bundles. Attempt logs redact all credentials.
 - **Prompt-Injection Defense:** Untrusted repository content (README and description) is bounded to 2,000 characters, stripped of delimiter tags (`</?untrusted_content[^>]*>`), and isolated inside `<untrusted_content>` tags with strict system instructions prohibiting execution of untrusted instructions.
 - **Deterministic Evidence Validation:** All AI-generated citations are audited post-generation against verified Phase 2 analysis facts by `EvidenceValidator` before persistence or client delivery.
 - **Input Sanitization:** URL parsing and path parameters are validated via Zod schemas and normalized to prevent path traversal (`../`) attacks.

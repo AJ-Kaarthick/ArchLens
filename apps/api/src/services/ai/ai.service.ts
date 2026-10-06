@@ -3,7 +3,7 @@ import type { ExplainRequest, ExplainResponse, ExplainTopic } from '@archlens/sh
 import { db } from '../../db/index.js';
 import { aiExplanations } from '../../db/schema.js';
 import { repositoryService, RepositoryService } from '../repository.service.js';
-import type { IAIProvider } from './provider.interface.js';
+import type { IAIProvider, ProviderLogger } from './provider.interface.js';
 import { AIProviderFactory } from './provider.factory.js';
 import { ContextBuilder } from './context-builder.js';
 import { EvidenceValidator } from './evidence-validator.js';
@@ -38,7 +38,8 @@ export class AIService {
     owner: string,
     repo: string,
     request: ExplainRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    logger?: ProviderLogger
   ): Promise<ExplainResponse> {
     const cleanOwner = owner.trim();
     const cleanRepo = repo.trim().replace(/\.git$/, '');
@@ -194,6 +195,7 @@ export class AIService {
       analysis,
       signal,
       deadlineMs: overallDeadline,
+      logger,
     });
 
     // 6. Validate evidence citations strictly against Phase 2 facts

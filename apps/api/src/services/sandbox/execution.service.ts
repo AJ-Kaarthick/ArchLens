@@ -38,7 +38,7 @@ export class ExecutionService {
         supportedProfiles: [],
         refusalReason: 'disabled',
         reasonMessage:
-          'Sandboxed code execution is disabled by deployment policy (ENABLE_SANDBOX=false).',
+          'Sandboxed code execution is disabled by deployment policy (ENABLE_UNSAFE_DEV_SANDBOX=yes required).',
         warnings: ['Code execution is disabled in this deployment.'],
       };
     }
@@ -83,6 +83,22 @@ export class ExecutionService {
       };
     }
 
+    // Reject arbitrary inlineCode submissions immediately before any processing
+    if ((request as any).inlineCode) {
+      return {
+        executionId,
+        status: 'refused',
+        exitCode: null,
+        stdout: '',
+        stderr: 'Arbitrary inlineCode submission is strictly forbidden for security containment.',
+        durationMs: Date.now() - startTime,
+        profile: request.profile || 'node-script',
+        refusalReason: 'unsafe_project',
+        refusalMessage: 'Arbitrary inlineCode submission is forbidden.',
+        timestamp: new Date().toISOString(),
+      };
+    }
+
     // 1. Fetch latest analysis & repository records
     const record = await this.repoService.getLatestAnalysisWithRecord(owner, repo);
     if (!record) {
@@ -108,8 +124,8 @@ export class ExecutionService {
     const profile: ExecutionProfile =
       request.profile || eligibility.recommendedProfile || 'node-script';
 
-    // If caller provided no inline code and repository is not eligible for this profile
-    if (!request.inlineCode && (!eligibility.eligible || !eligibility.supportedProfiles.includes(profile))) {
+    // If repository is not eligible for this profile
+    if (!eligibility.eligible || !eligibility.supportedProfiles.includes(profile)) {
       const refusalResult: ExecutionResult = {
         executionId,
         status: 'refused',
@@ -137,22 +153,16 @@ export class ExecutionService {
       }
     }
 
-    // 4. Gather workspace files
+    // 4. Gather workspace files strictly from verified repository landmarks
     const files: WorkspaceFile[] = [];
 
-    if (request.inlineCode) {
-      files.push({
-        path: entrypoint,
-        content: request.inlineCode,
-      });
-    } else {
-      try {
-        const entrypointContent = await this.repoService.getLandmarkContent(
-          owner,
-          repo,
-          entrypoint,
-          analysis.commitSha || undefined
-        );
+    try {
+      const entrypointContent = await this.repoService.getLandmarkContent(
+        owner,
+        repo,
+        entrypoint,
+        analysis.commitSha || undefined
+      );
         files.push({
           path: entrypoint,
           content: entrypointContent.content,
@@ -204,7 +214,6 @@ export class ExecutionService {
         await this.logExecution(repositoryId, analysisId, failureResult);
         return failureResult;
       }
-    }
 
     // 5. Prepare ephemeral sandbox workspace
     let ws;

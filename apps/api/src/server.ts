@@ -23,6 +23,7 @@ import {
   rateLimitErrorResponseBuilder,
   type RateLimitConfig,
 } from './config/rate-limit.js';
+import { isUnsafeDevSandboxEnabled } from './services/sandbox/policy.js';
 
 /**
  * Creates structured Pino logger configuration with strict security redaction rules.
@@ -87,6 +88,46 @@ export function createLoggerConfig(
   };
 }
 
+/**
+ * Safely parses the trustProxy configuration for Fastify.
+ *
+ * Security & Network Boundary Design:
+ * - When unset: Defaults to ['loopback', 'linklocal', 'uniquelocal'].
+ *   This trusts reverse proxies running on localhost, private Docker bridge networks (172.16.0.0/12),
+ *   and internal subnets (10.0.0.0/8, 192.168.0.0/16).
+ *   If exposed directly to the public internet, requests from public client IPs are NOT trusted proxies,
+ *   so spoofed X-Forwarded-For headers from untrusted clients are safely ignored.
+ * - When behind Nginx (as in docker-compose.yml): Fastify trusts Nginx's internal container IP, extracts
+ *   the true client IP from X-Forwarded-For, and isolates rate limits per client.
+ * - Explicit override: TRUST_PROXY can be set to 'false' (disabled), 'true' (trust all hops),
+ *   a number (e.g. 1 hop), or a custom comma-separated list of CIDR subnets.
+ */
+export function parseTrustProxy(
+  envVal: string | undefined = process.env.TRUST_PROXY
+): FastifyServerOptions['trustProxy'] {
+  if (envVal === undefined || envVal === '') {
+    return ['loopback', 'linklocal', 'uniquelocal'];
+  }
+
+  const trimmed = envVal.trim().toLowerCase();
+  if (trimmed === 'false' || trimmed === '0' || trimmed === 'off' || trimmed === 'no') {
+    return false;
+  }
+  if (trimmed === 'true' || trimmed === 'yes' || trimmed === 'on') {
+    return true;
+  }
+
+  const num = parseInt(trimmed, 10);
+  if (!Number.isNaN(num) && String(num) === trimmed && num >= 0) {
+    return num;
+  }
+
+  return envVal
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export interface BuildAppOptions {
   logger?: boolean | FastifyServerOptions['logger'];
   rateLimitConfig?: RateLimitConfig;
@@ -96,6 +137,8 @@ export interface BuildAppOptions {
   executionService?: ExecutionService;
   workspaceManager?: WorkspaceManager;
   checkDb?: () => Promise<boolean>;
+  trustProxy?: FastifyServerOptions['trustProxy'];
+  enableUnsafeDevSandbox?: boolean;
 }
 
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
@@ -108,8 +151,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
           ? false
           : options.logger;
 
+  const trustProxy =
+    options.trustProxy !== undefined ? options.trustProxy : parseTrustProxy();
+
   const app = Fastify({
     logger: loggerOption,
+    trustProxy,
     genReqId(req) {
       return (req.headers['x-request-id'] as string) || randomUUID();
     },
@@ -149,9 +196,27 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.register(createRepositoryRoutes(options.repositoryService, rateLimitCfg));
   app.register(createAiRoutes(options.aiService, rateLimitCfg));
   app.register(createSearchRoutes(options.retrievalService, rateLimitCfg));
-  app.register(
-    createExecutionRoutes(options.executionService, options.workspaceManager, rateLimitCfg)
-  );
+
+  // Gating of execution and preview routes (disabled by default in all environments)
+  const isSandboxActive =
+    options.enableUnsafeDevSandbox !== undefined
+      ? options.enableUnsafeDevSandbox
+      : isUnsafeDevSandboxEnabled();
+
+  if (isSandboxActive) {
+    app.log.warn(
+      '⚠️ CRITICAL SECURITY WARNING: Unsafe development sandbox is ENABLED (ENABLE_UNSAFE_DEV_SANDBOX=yes). ' +
+        'Host-process Node execution is active without kernel-level container/cgroup isolation. ' +
+        'DO NOT execute untrusted or hostile code in this environment!'
+    );
+    app.register(
+      createExecutionRoutes(options.executionService, options.workspaceManager, rateLimitCfg)
+    );
+  } else {
+    app.log.info(
+      'Host sandbox execution and preview routes are disabled (default secure containment).'
+    );
+  }
 
   return app;
 }

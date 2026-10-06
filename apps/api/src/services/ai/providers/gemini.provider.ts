@@ -41,35 +41,201 @@ export function redactSecrets(message: string, keys: (string | undefined)[]): st
   return redacted;
 }
 
+export interface ProviderLogger {
+  info(obj: Record<string, unknown>, msg?: string): void;
+  warn(obj: Record<string, unknown>, msg?: string): void;
+  error(obj: Record<string, unknown>, msg?: string): void;
+}
+
+export type GeminiErrorCategory =
+  | 'auth_or_permission'
+  | 'quota_rate_limit'
+  | 'service_unavailable'
+  | 'client_cancellation'
+  | 'timeout'
+  | 'bad_request'
+  | 'malformed_response'
+  | 'safety_blocked'
+  | 'unknown';
+
+export interface ExtractedErrorStatus {
+  status?: number;
+  code?: string;
+  isTimeout?: boolean;
+  isAbort?: boolean;
+}
+
+/**
+ * Extracts structured HTTP status, error codes, and flags from provider or SDK errors.
+ * Avoids misclassifying timeout durations (e.g. 4030ms) or ports as HTTP statuses.
+ */
+export function extractErrorStatus(err: unknown): ExtractedErrorStatus {
+  if (!err) return {};
+
+  const anyErr = err as any;
+  let status: number | undefined =
+    typeof anyErr.status === 'number'
+      ? anyErr.status
+      : typeof anyErr.statusCode === 'number'
+        ? anyErr.statusCode
+        : typeof anyErr.response?.status === 'number'
+          ? anyErr.response.status
+          : undefined;
+
+  let code: string | undefined =
+    typeof anyErr.code === 'string'
+      ? anyErr.code
+      : typeof anyErr.statusText === 'string'
+        ? anyErr.statusText
+        : undefined;
+
+  const isAbort =
+    (err instanceof Error && (err.name === 'AbortError' || anyErr.code === 'ABORT_ERR')) ||
+    (typeof anyErr.message === 'string' &&
+      /\b(?:request was aborted|aborted by caller|client aborted)\b/i.test(anyErr.message));
+
+  const isTimeout =
+    (err instanceof Error && (err.name === 'TimeoutError' || anyErr.isTimeout === true)) ||
+    (typeof anyErr.message === 'string' &&
+      /\b(?:timed out|timeout)\b/i.test(anyErr.message) &&
+      !isAbort);
+
+  // If status was not directly numeric on the error object, parse bounded status patterns from message
+  if (status === undefined && typeof anyErr.message === 'string') {
+    // Only match patterns like [403], status: 403, HTTP 429, 503 Service Unavailable, 500 Internal Server Error
+    // Avoids misinterpreting milliseconds (e.g. 4030ms) or ports (e.g. 4001) as HTTP status
+    const match = anyErr.message.match(
+      /(?:\[\s*([45]\d{2})\s*\]|\b(?:status|code|http|error)\s*[:=]?\s*([45]\d{2})\b|\b([45]\d{2})\s+(?:forbidden|unauthorized|bad request|too many requests|resource exhausted|internal (?:server )?error|bad gateway|service unavailable|gateway timeout|not found)\b)/i
+    );
+    const parsedStr = match ? match[1] || match[2] || match[3] : undefined;
+    if (parsedStr) {
+      const parsed = parseInt(parsedStr, 10);
+      if ([400, 401, 403, 404, 408, 429, 500, 502, 503, 504].includes(parsed)) {
+        status = parsed;
+      }
+    }
+  }
+
+  return { status, code, isTimeout, isAbort };
+}
+
+/**
+ * Classifies an error into specific semantic categories based on structured metadata first.
+ */
+export function classifyGeminiError(err: unknown): GeminiErrorCategory {
+  if (!err) return 'unknown';
+
+  const { status, code, isTimeout, isAbort } = extractErrorStatus(err);
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+
+  // 1. Client cancellation takes highest precedence
+  if (isAbort) {
+    return 'client_cancellation';
+  }
+
+  // 2. Timeout (ArchLens timer or socket timeout)
+  if (isTimeout) {
+    return 'timeout';
+  }
+
+  // 3. Auth & permissions (401, 403, permission denied, invalid api key)
+  if (
+    status === 401 ||
+    status === 403 ||
+    code === 'PERMISSION_DENIED' ||
+    code === 'UNAUTHENTICATED' ||
+    msg.includes('api_key_invalid') ||
+    msg.includes('api key not valid') ||
+    msg.includes('invalid api key') ||
+    msg.includes('permission_denied')
+  ) {
+    return 'auth_or_permission';
+  }
+
+  // 4. Rate limit & quota exhaustion (429, resource exhausted)
+  if (
+    status === 429 ||
+    code === 'RESOURCE_EXHAUSTED' ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('resource exhausted') ||
+    msg.includes('resource has been exhausted') ||
+    msg.includes('quota exceeded') ||
+    msg.includes('rate limit exceeded') ||
+    msg.includes('too many requests')
+  ) {
+    return 'quota_rate_limit';
+  }
+
+  // 5. Service unavailability & capacity (503, 502, 504, unavailable)
+  if (
+    status === 503 ||
+    status === 502 ||
+    status === 504 ||
+    code === 'UNAVAILABLE' ||
+    msg.includes('service unavailable') ||
+    msg.includes('model is overloaded')
+  ) {
+    return 'service_unavailable';
+  }
+
+  // 6. Safety & content policy blocks
+  if (
+    msg.includes('safety') ||
+    msg.includes('harm_category') ||
+    msg.includes('content policy') ||
+    msg.includes('blocked by safety')
+  ) {
+    return 'safety_blocked';
+  }
+
+  // 7. Malformed / unparseable response
+  if (
+    msg.includes('failed to parse gemini output as json') ||
+    msg.includes('returned an empty response') ||
+    msg.includes('unexpected token')
+  ) {
+    return 'malformed_response';
+  }
+
+  // 8. Bad request / invalid argument (400)
+  if (
+    status === 400 ||
+    code === 'INVALID_ARGUMENT' ||
+    msg.includes('invalid argument') ||
+    msg.includes('invalid_argument')
+  ) {
+    return 'bad_request';
+  }
+
+  // 9. Internal server error & network disconnects
+  if (
+    status === 500 ||
+    code === 'INTERNAL' ||
+    msg.includes('internal error') ||
+    msg.includes('internal server error') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('fetch failed') ||
+    msg.includes('socket hang up') ||
+    msg.includes('network') ||
+    msg.includes('connecting') ||
+    msg.includes('connection')
+  ) {
+    return 'service_unavailable';
+  }
+
+  return 'unknown';
+}
+
 /**
  * Returns true if the error indicates a permanent client/auth/config failure that should NOT be retried.
  */
 export function isNonTransientError(err: unknown): boolean {
-  if (!err) return false;
-  const status = (err as any)?.status ?? (err as any)?.statusCode;
-  if (status === 400 || status === 401 || status === 403) {
-    return true;
-  }
-  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
-
+  const category = classifyGeminiError(err);
   return (
-    msg.includes('400') ||
-    msg.includes('invalid argument') ||
-    msg.includes('invalid_argument') ||
-    msg.includes('bad request') ||
-    msg.includes('401') ||
-    msg.includes('unauthenticated') ||
-    msg.includes('api_key_invalid') ||
-    msg.includes('api key not valid') ||
-    msg.includes('invalid api key') ||
-    msg.includes('403') ||
-    msg.includes('permission_denied') ||
-    msg.includes('permission denied') ||
-    msg.includes('safety') ||
-    msg.includes('content-policy') ||
-    msg.includes('content policy') ||
-    msg.includes('harm_category') ||
-    msg.includes('blocked')
+    category === 'auth_or_permission' ||
+    category === 'bad_request' ||
+    category === 'safety_blocked'
   );
 }
 
@@ -77,50 +243,11 @@ export function isNonTransientError(err: unknown): boolean {
  * Returns true if the error indicates a transient service/network failure suitable for retry or fallback.
  */
 export function isTransientError(err: unknown): boolean {
-  if (!err) return false;
-  if (isNonTransientError(err)) return false;
-
-  // Abort / cancellation must NEVER be treated as a retryable transient error
-  if (
-    err instanceof Error &&
-    (err.name === 'AbortError' || err.message.toLowerCase().includes('aborted'))
-  ) {
-    return false;
-  }
-
-  const status = (err as any)?.status ?? (err as any)?.statusCode;
-  if (
-    status === 429 ||
-    status === 500 ||
-    status === 502 ||
-    status === 503 ||
-    status === 504
-  ) {
-    return true;
-  }
-
-  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
-
+  const category = classifyGeminiError(err);
   return (
-    msg.includes('429') ||
-    msg.includes('resource_exhausted') ||
-    msg.includes('quota') ||
-    msg.includes('rate limit') ||
-    msg.includes('503') ||
-    msg.includes('unavailable') ||
-    msg.includes('500') ||
-    msg.includes('internal error') ||
-    msg.includes('502') ||
-    msg.includes('bad gateway') ||
-    msg.includes('504') ||
-    msg.includes('gateway timeout') ||
-    msg.includes('timed out') ||
-    msg.includes('timeout') ||
-    msg.includes('econnreset') ||
-    msg.includes('etimedout') ||
-    msg.includes('fetch failed') ||
-    msg.includes('socket hang up') ||
-    msg.includes('network')
+    category === 'service_unavailable' ||
+    category === 'quota_rate_limit' ||
+    category === 'timeout'
   );
 }
 
@@ -128,16 +255,7 @@ export function isTransientError(err: unknown): boolean {
  * Returns true specifically for rate limit / quota exhaustion errors (429).
  */
 export function isRateLimitError(err: unknown): boolean {
-  if (!err) return false;
-  const status = (err as any)?.status ?? (err as any)?.statusCode;
-  if (status === 429) return true;
-  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
-  return (
-    msg.includes('429') ||
-    msg.includes('resource_exhausted') ||
-    msg.includes('quota') ||
-    msg.includes('rate limit')
-  );
+  return classifyGeminiError(err) === 'quota_rate_limit';
 }
 
 export interface GeminiAIProviderOptions {
@@ -155,6 +273,7 @@ export interface GeminiAIProviderOptions {
   maxBackoffMs?: number;
   backoffFactor?: number;
   sleepFn?: (ms: number) => Promise<void>;
+  logger?: ProviderLogger;
 }
 
 export class GeminiAIProvider implements IAIProvider {
@@ -176,6 +295,7 @@ export class GeminiAIProvider implements IAIProvider {
   private maxBackoffMs: number;
   private backoffFactor: number;
   private sleepFn: (ms: number) => Promise<void>;
+  private logger: ProviderLogger;
 
   constructor(options: GeminiAIProviderOptions = {}) {
     const apiKey = options.apiKey || process.env.GEMINI_API_KEY;
@@ -218,6 +338,23 @@ export class GeminiAIProvider implements IAIProvider {
     this.maxBackoffMs = options.maxBackoffMs ?? 1500;
     this.backoffFactor = options.backoffFactor ?? 2;
     this.sleepFn = options.sleepFn ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.logger = options.logger ?? {
+      info: (obj, msg) => {
+        if (process.env.NODE_ENV !== 'test') {
+          console.log(JSON.stringify({ level: 'info', ...obj, msg }));
+        }
+      },
+      warn: (obj, msg) => {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn(JSON.stringify({ level: 'warn', ...obj, msg }));
+        }
+      },
+      error: (obj, msg) => {
+        if (process.env.NODE_ENV !== 'test') {
+          console.error(JSON.stringify({ level: 'error', ...obj, msg }));
+        }
+      },
+    };
   }
 
   get hasFallback(): boolean {
@@ -237,6 +374,7 @@ export class GeminiAIProvider implements IAIProvider {
       throw new Error('AI explanation request was aborted.');
     }
 
+    const log = request.logger || this.logger;
     const deadline = request.deadlineMs
       ? Math.min(request.deadlineMs, Date.now() + this.totalBudgetMs)
       : Date.now() + this.totalBudgetMs;
@@ -287,6 +425,7 @@ export class GeminiAIProvider implements IAIProvider {
         }
 
         const timeoutMs = Math.min(this.perAttemptTimeoutMs, remainingMs);
+        const attemptNumber = attempt + 1;
 
         try {
           return await this.executeCall(
@@ -294,7 +433,10 @@ export class GeminiAIProvider implements IAIProvider {
             tier.model,
             request.context,
             timeoutMs,
-            request.signal
+            tier.name,
+            attemptNumber,
+            request.signal,
+            log
           );
         } catch (err: unknown) {
           // If request was aborted by client or caller, terminate immediately without retry or fallback
@@ -360,8 +502,13 @@ export class GeminiAIProvider implements IAIProvider {
     model: string,
     context: string,
     timeoutMs: number,
-    parentSignal?: AbortSignal
+    tierName: string,
+    attemptNumber: number,
+    parentSignal?: AbortSignal,
+    logger?: ProviderLogger
   ): Promise<AIExplanationResult> {
+    const log = logger || this.logger;
+    const callStart = Date.now();
     const abortController = new AbortController();
 
     let parentListener: (() => void) | undefined;
@@ -423,6 +570,32 @@ export class GeminiAIProvider implements IAIProvider {
 
         const validated = AIExplanationResultSchema.parse(parsed);
 
+        const latencyMs = Date.now() - callStart;
+        const finishReason = response.candidates?.[0]?.finishReason ?? 'STOP';
+        const usage = response.usageMetadata;
+
+        log.info(
+          {
+            event: 'gemini_provider_attempt',
+            provider: this.name,
+            tier: tierName,
+            model,
+            attempt: attemptNumber,
+            httpStatus: 200,
+            latencyMs,
+            finishReason,
+            tokenUsage: usage
+              ? {
+                  promptTokens: usage.promptTokenCount,
+                  candidatesTokens: usage.candidatesTokenCount,
+                  totalTokens: usage.totalTokenCount,
+                  thinkingTokens: (usage as any).candidatesTokensDetails?.[0]?.thinkingTokenCount,
+                }
+              : undefined,
+          },
+          'Gemini provider attempt succeeded'
+        );
+
         return {
           summary: validated.summary,
           explanation: validated.explanation,
@@ -438,6 +611,31 @@ export class GeminiAIProvider implements IAIProvider {
       }
     })();
 
-    return Promise.race([executionPromise, timeoutPromise]);
+    try {
+      return await Promise.race([executionPromise, timeoutPromise]);
+    } catch (err: unknown) {
+      const callDuration = Date.now() - callStart;
+      const { status, code, isTimeout, isAbort } = extractErrorStatus(err);
+      const errorCategory = classifyGeminiError(err);
+      const httpStatus = status ?? (isTimeout ? 408 : isAbort ? 499 : undefined);
+
+      log.warn(
+        {
+          event: 'gemini_provider_attempt',
+          provider: this.name,
+          tier: tierName,
+          model,
+          attempt: attemptNumber,
+          httpStatus,
+          latencyMs: callDuration,
+          errorClass: errorCategory,
+          errorCode: code,
+          errorMessage: this.sanitize(err instanceof Error ? err.message : String(err)),
+        },
+        'Gemini provider attempt failed'
+      );
+
+      throw err;
+    }
   }
 }
