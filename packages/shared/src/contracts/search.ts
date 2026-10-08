@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { FileCategorySchema } from './repository.js';
 
+export const SearchModeSchema = z.enum(['lexical', 'semantic', 'hybrid']).default('hybrid');
+export type SearchMode = z.infer<typeof SearchModeSchema>;
+
 export const SearchQuerySchema = z.object({
   query: z
     .string()
@@ -10,6 +13,7 @@ export const SearchQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(20).default(5),
   pathPrefix: z.string().max(200).optional(),
   category: FileCategorySchema.optional(),
+  mode: SearchModeSchema.optional(),
   forceReindex: z.boolean().optional(),
 });
 
@@ -34,6 +38,25 @@ export const SearchResponseSchema = z.object({
   totalMatches: z.number().int().nonnegative(),
   durationMs: z.number().nonnegative(),
   fallback: z.boolean().default(false),
+  mode: SearchModeSchema.optional(),
 });
 
 export type SearchResponse = z.infer<typeof SearchResponseSchema>;
+
+export const IndexStatusSchema = z.enum(['not_indexed', 'indexing', 'ready', 'failed']);
+export type IndexStatus = z.infer<typeof IndexStatusSchema>;
+
+export const IndexStatusResponseSchema = z.object({
+  status: IndexStatusSchema,
+  indexedChunks: z.number().int().nonnegative(),
+  error: z.string().nullable().optional(),
+  updatedAt: z.string().optional(),
+});
+
+export type IndexStatusResponse = z.infer<typeof IndexStatusResponseSchema>;
+
+export const IndexRequestSchema = z.object({
+  force: z.boolean().optional(),
+});
+
+export type IndexRequest = z.infer<typeof IndexRequestSchema>;
