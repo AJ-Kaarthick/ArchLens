@@ -14,10 +14,11 @@ describe('RepositoryService - Analysis Identity and Deduplication', () => {
     await sql.end();
   });
 
-  it('reuses existing analysis row when repository is analyzed at the same commit SHA', async () => {
-    const testOwner = `dedup-test-${Date.now()}`;
+  it('reuses existing analysis row on same commit SHA and skips getGitTree / metadata', async () => {
+    const testOwner = `fastpath-test-${Date.now()}`;
     const testRepo = 'sample-repo';
-    const commitSha = 'sha-111111';
+    const commitSha = 'commit-1111111111111111111111111111111111111111';
+    const treeSha = 'tree-2222222222222222222222222222222222222222';
 
     const mockMetadata = {
       id: '999999',
@@ -34,16 +35,19 @@ describe('RepositoryService - Analysis Identity and Deduplication', () => {
     };
 
     const mockTree = {
-      sha: commitSha,
+      sha: treeSha,
       tree: [
-        { path: 'package.json', mode: '100644', type: 'blob', size: 100 },
-        { path: 'src/index.ts', mode: '100644', type: 'blob', size: 200 },
+        { path: 'package.json', mode: '100644', type: 'blob' as const, size: 100 },
+        { path: 'src/index.ts', mode: '100644', type: 'blob' as const, size: 200 },
       ],
       truncated: false,
     };
 
     const manifestContent = JSON.stringify({ name: testRepo, dependencies: { react: '^18.0.0' } });
 
+    const getHeadCommitSpy = vi.fn().mockResolvedValue({ commitSha, treeSha });
+    const getMetadataSpy = vi.fn().mockResolvedValue(mockMetadata);
+    const getGitTreeSpy = vi.fn().mockResolvedValue(mockTree);
     const getFileContentSpy = vi.fn().mockResolvedValue({
       path: 'package.json',
       name: 'package.json',
@@ -54,16 +58,20 @@ describe('RepositoryService - Analysis Identity and Deduplication', () => {
     });
 
     const mockGh = {
-      getRepositoryMetadata: vi.fn().mockResolvedValue(mockMetadata),
-      getGitTree: vi.fn().mockResolvedValue(mockTree),
+      getHeadCommit: getHeadCommitSpy,
+      getRepositoryMetadata: getMetadataSpy,
+      getGitTree: getGitTreeSpy,
       getFileContent: getFileContentSpy,
     } as unknown as GitHubService;
 
     const service = new RepositoryService(mockGh);
 
-    // First analysis: creates analysis row
+    // Call 1: Cold analysis creates row
     const res1 = await service.analyze(testOwner, testRepo);
     expect(res1.commitSha).toBe(commitSha);
+    expect(getHeadCommitSpy).toHaveBeenCalledTimes(1);
+    expect(getGitTreeSpy).toHaveBeenCalledTimes(1);
+    expect(getFileContentSpy).toHaveBeenCalledTimes(1);
 
     const [repoRow] = await db
       .select()
@@ -76,17 +84,27 @@ describe('RepositoryService - Analysis Identity and Deduplication', () => {
       .from(analyses)
       .where(eq(analyses.repositoryId, repoRow.id));
     expect(analysisRows1).toHaveLength(1);
+    expect(analysisRows1[0].commitSha).toBe(commitSha);
     const firstAnalysisId = analysisRows1[0].id;
 
-    // Second analysis: SAME SHA -> must reuse analysis and NOT fetch manifests again
+    // Reset spies for Call 2
+    getHeadCommitSpy.mockClear();
+    getMetadataSpy.mockClear();
+    getGitTreeSpy.mockClear();
     getFileContentSpy.mockClear();
+
+    // Call 2: Cache hit - MUST use fast path!
     const res2 = await service.analyze(testOwner, testRepo);
     expect(res2.commitSha).toBe(commitSha);
 
-    // Must NOT have fetched manifests again
+    // CRITICAL FAST PATH ASSERTIONS:
+    // Only getHeadCommit was called. NO tree, NO metadata, NO file content fetched!
+    expect(getHeadCommitSpy).toHaveBeenCalledTimes(1);
+    expect(getMetadataSpy).not.toHaveBeenCalled();
+    expect(getGitTreeSpy).not.toHaveBeenCalled();
     expect(getFileContentSpy).not.toHaveBeenCalled();
 
-    // Must still have exactly 1 analysis row
+    // Database still has exactly 1 analysis row
     const analysisRows2 = await db
       .select()
       .from(analyses)
@@ -101,8 +119,8 @@ describe('RepositoryService - Analysis Identity and Deduplication', () => {
   it('creates a new analysis row when the repository commit SHA changes', async () => {
     const testOwner = `sha-change-test-${Date.now()}`;
     const testRepo = 'sample-repo';
-    const shaA = 'sha-aaaaaa';
-    const shaB = 'sha-bbbbbb';
+    const shaA = 'commit-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const shaB = 'commit-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
     const mockMetadata = {
       id: '999998',
@@ -119,21 +137,26 @@ describe('RepositoryService - Analysis Identity and Deduplication', () => {
     };
 
     const mockTreeA = {
-      sha: shaA,
-      tree: [{ path: 'package.json', mode: '100644', type: 'blob', size: 100 }],
+      sha: 'tree-a',
+      tree: [{ path: 'package.json', mode: '100644', type: 'blob' as const, size: 100 }],
       truncated: false,
     };
 
     const mockTreeB = {
-      sha: shaB,
+      sha: 'tree-b',
       tree: [
-        { path: 'package.json', mode: '100644', type: 'blob', size: 100 },
-        { path: 'src/app.ts', mode: '100644', type: 'blob', size: 300 },
+        { path: 'package.json', mode: '100644', type: 'blob' as const, size: 100 },
+        { path: 'src/app.ts', mode: '100644', type: 'blob' as const, size: 300 },
       ],
       truncated: false,
     };
 
+    const getHeadCommitSpy = vi.fn()
+      .mockResolvedValueOnce({ commitSha: shaA, treeSha: 'tree-a' })
+      .mockResolvedValueOnce({ commitSha: shaB, treeSha: 'tree-b' });
+
     const mockGh = {
+      getHeadCommit: getHeadCommitSpy,
       getRepositoryMetadata: vi.fn().mockResolvedValue(mockMetadata),
       getGitTree: vi.fn()
         .mockResolvedValueOnce(mockTreeA)
@@ -167,6 +190,158 @@ describe('RepositoryService - Analysis Identity and Deduplication', () => {
       .where(eq(analyses.repositoryId, repoRow.id));
 
     expect(analysisRows).toHaveLength(2);
+
+    // Cleanup
+    await db.delete(repositories).where(eq(repositories.id, repoRow.id));
+  });
+
+  it('single-flight prevents duplicate work during concurrent cold analyses', async () => {
+    const testOwner = `flight-test-${Date.now()}`;
+    const testRepo = 'flight-repo';
+    const commitSha = 'commit-flight-111111111111111111111111111111';
+
+    const mockMetadata = {
+      id: '888888',
+      owner: testOwner,
+      name: testRepo,
+      url: `https://github.com/${testOwner}/${testRepo}`,
+      description: 'Single-flight test repo',
+      defaultBranch: 'main',
+      stars: 1,
+      forks: 0,
+      primaryLanguage: 'TypeScript',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const mockTree = {
+      sha: 'tree-flight',
+      tree: [{ path: 'package.json', mode: '100644', type: 'blob' as const, size: 100 }],
+      truncated: false,
+    };
+
+    const getGitTreeSpy = vi.fn().mockImplementation(async () => {
+      // Simulate slow tree fetch
+      await new Promise((r) => setTimeout(r, 50));
+      return mockTree;
+    });
+
+    const mockGh = {
+      getHeadCommit: vi.fn().mockResolvedValue({ commitSha, treeSha: 'tree-flight' }),
+      getRepositoryMetadata: vi.fn().mockResolvedValue(mockMetadata),
+      getGitTree: getGitTreeSpy,
+      getFileContent: vi.fn().mockResolvedValue({
+        path: 'package.json',
+        name: 'package.json',
+        size: 20,
+        content: '{}',
+        encoding: 'utf-8',
+        isTruncated: false,
+      }),
+    } as unknown as GitHubService;
+
+    const service = new RepositoryService(mockGh);
+
+    // Trigger two concurrent cold analyses
+    const [res1, res2] = await Promise.all([
+      service.analyze(testOwner, testRepo),
+      service.analyze(testOwner, testRepo),
+    ]);
+
+    expect(res1.commitSha).toBe(commitSha);
+    expect(res2.commitSha).toBe(commitSha);
+
+    // Single-flight ensures getGitTree was called ONLY ONCE
+    expect(getGitTreeSpy).toHaveBeenCalledTimes(1);
+
+    const [repoRow] = await db
+      .select()
+      .from(repositories)
+      .where(and(eq(repositories.owner, testOwner), eq(repositories.name, testRepo)));
+
+    const analysisRows = await db
+      .select()
+      .from(analyses)
+      .where(eq(analyses.repositoryId, repoRow.id));
+
+    expect(analysisRows).toHaveLength(1);
+
+    // Cleanup
+    await db.delete(repositories).where(eq(repositories.id, repoRow.id));
+  });
+
+  it('migrates legacy analysis stored with tree SHA to commit SHA on cache hit', async () => {
+    const testOwner = `legacy-test-${Date.now()}`;
+    const testRepo = 'legacy-repo';
+    const legacyTreeSha = 'tree-old-legacy-sha-99999999999999999999';
+    const actualCommitSha = 'commit-real-head-sha-8888888888888888888';
+
+    // 1. Manually insert repo and legacy analysis with tree SHA
+    const [repoRow] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        description: 'Legacy repo',
+        stars: 0,
+        forks: 0,
+        primaryLanguage: 'TypeScript',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    await db.insert(analyses).values({
+      repositoryId: repoRow.id,
+      commitSha: legacyTreeSha, // Legacy stored treeSha
+      techStack: [],
+      architecture: {
+        isMonorepo: false,
+        monorepoTool: null,
+        workspaces: [],
+        detectedPatterns: [],
+        primaryEntrypoints: [],
+        keyLandmarks: [],
+      },
+      metrics: {
+        totalFiles: 1,
+        totalBytes: 100,
+        languages: {},
+        categories: {},
+        largestFiles: [],
+      },
+      tree: [],
+      analyzedAt: new Date(),
+    });
+
+    const mockGh = {
+      getHeadCommit: vi.fn().mockResolvedValue({
+        commitSha: actualCommitSha,
+        treeSha: legacyTreeSha,
+      }),
+      getRepositoryMetadata: vi.fn(),
+      getGitTree: vi.fn(),
+      getFileContent: vi.fn(),
+    } as unknown as GitHubService;
+
+    const service = new RepositoryService(mockGh);
+
+    // Call analyze: should detect legacy treeSha, migrate commitSha, and return cached result
+    const res = await service.analyze(testOwner, testRepo);
+    expect(res.commitSha).toBe(actualCommitSha);
+
+    // Verify tree/metadata were NOT fetched
+    expect(mockGh.getGitTree).not.toHaveBeenCalled();
+    expect(mockGh.getRepositoryMetadata).not.toHaveBeenCalled();
+
+    // Verify DB row now has actualCommitSha
+    const [updatedRow] = await db
+      .select()
+      .from(analyses)
+      .where(eq(analyses.repositoryId, repoRow.id));
+    expect(updatedRow.commitSha).toBe(actualCommitSha);
 
     // Cleanup
     await db.delete(repositories).where(eq(repositories.id, repoRow.id));

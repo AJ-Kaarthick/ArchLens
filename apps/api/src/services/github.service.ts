@@ -78,6 +78,11 @@ export interface RawGitTreeResponse {
   truncated: boolean;
 }
 
+export interface HeadCommitInfo {
+  commitSha: string;
+  treeSha?: string;
+}
+
 export const MAX_TREE_ITEMS = 10000;
 export const MAX_FILE_SIZE_BYTES = 256 * 1024; // 256 KB
 
@@ -215,6 +220,37 @@ export class GitHubService {
       primaryLanguage: data.language || null,
       createdAt: data.created_at || new Date().toISOString(),
       updatedAt: data.updated_at || new Date().toISOString(),
+    };
+  }
+
+  async getHeadCommit(
+    owner: string,
+    repo: string,
+    ref = 'HEAD',
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ): Promise<HeadCommitInfo> {
+    const res = await this.fetchGitHub(`/repos/${owner}/${repo}/commits/${ref}`, options);
+
+    if (res.status === 404) {
+      throw new GitHubNotFoundError(owner, repo);
+    }
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(
+        `Failed to fetch commit info (${res.status}): ${text}`,
+        res.status
+      );
+    }
+
+    const data = (await res.json()) as any;
+    if (!data?.sha) {
+      throw new GitHubApiError(`Malformed commit response: missing commit SHA`, res.status);
+    }
+
+    return {
+      commitSha: data.sha,
+      treeSha: data.commit?.tree?.sha || undefined,
     };
   }
 

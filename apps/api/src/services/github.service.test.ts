@@ -187,4 +187,40 @@ describe('GitHubService (Offline / Mocked)', () => {
       service.getRepositoryMetadata('owner', 'slow-repo', { timeoutMs: 50 })
     ).rejects.toThrow(GitHubTimeoutError);
   });
+
+  describe('getHeadCommit', () => {
+    it('returns commitSha and treeSha on successful response', async () => {
+      const mockResponse = new Response(
+        JSON.stringify({
+          sha: 'commit-sha-12345',
+          commit: {
+            tree: {
+              sha: 'tree-sha-67890',
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse);
+
+      const service = new GitHubService();
+      const result = await service.getHeadCommit('tiangolo', 'fastapi');
+
+      expect(result.commitSha).toBe('commit-sha-12345');
+      expect(result.treeSha).toBe('tree-sha-67890');
+    });
+
+    it('throws GitHubNotFoundError on 404', async () => {
+      const mockResponse = new Response(JSON.stringify({ message: 'Not Found' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse);
+
+      const service = new GitHubService();
+      await expect(service.getHeadCommit('invalid', 'repo')).rejects.toThrow(GitHubNotFoundError);
+    });
+  });
 });
