@@ -59,6 +59,11 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/archlens
         run: pnpm -r run test
 
+      - name: Verify database schema & migration consistency (no drift)
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/archlens
+        run: pnpm --filter @archlens/api db:check
+
       - name: Run production build
         run: pnpm -r run build
 
