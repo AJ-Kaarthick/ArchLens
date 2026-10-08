@@ -18,6 +18,7 @@ import { createExecutionRoutes } from './routes/execution.routes.js';
 import { ExecutionService } from './services/sandbox/execution.service.js';
 import { WorkspaceManager, workspaceManager } from './services/sandbox/workspace-manager.js';
 import { ProcessSandboxRunner, processSandboxRunner } from './services/sandbox/process-runner.js';
+import { createCapabilitiesRoutes } from './routes/capabilities.routes.js';
 import {
   getRateLimitConfig,
   rateLimitErrorResponseBuilder,
@@ -196,6 +197,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.register(createRepositoryRoutes(options.repositoryService, rateLimitCfg));
   app.register(createAiRoutes(options.aiService, rateLimitCfg));
   app.register(createSearchRoutes(options.retrievalService, rateLimitCfg));
+  app.register(createCapabilitiesRoutes({ enableUnsafeDevSandbox: options.enableUnsafeDevSandbox }));
 
   // Gating of execution and preview routes (disabled by default in all environments)
   const isSandboxActive =

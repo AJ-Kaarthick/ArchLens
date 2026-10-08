@@ -6,6 +6,7 @@ import {
   type ApiError,
   type LandmarkInfo,
   type FileTreeItem,
+  type ServerCapabilities,
 } from '@archlens/shared';
 import { RepoHeader } from './components/RepoHeader.tsx';
 import { ArchitectureView } from './components/ArchitectureView.tsx';
@@ -70,12 +71,44 @@ export function App() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>('overview');
   const [unanalyzedRepo, setUnanalyzedRepo] = useState<{ owner: string; repo: string } | null>(null);
+  const [capabilities, setCapabilities] = useState<ServerCapabilities>({
+    ai: true,
+    execution: false,
+    semanticIndex: true,
+  });
 
   const [landmarkContent, setLandmarkContent] = useState<LandmarkContent | null>(null);
   const [loadingLandmark, setLoadingLandmark] = useState(false);
 
   // Track currently loaded repository key (lowercase "owner/repo")
   const loadedRepoKeyRef = useRef<string | null>(null);
+
+  // Fetch server capabilities on mount
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/capabilities')
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json()) as ServerCapabilities;
+      })
+      .then((caps) => {
+        if (!cancelled && caps) {
+          setCapabilities(caps);
+          if (!caps.execution && activeTab === 'execution') {
+            setActiveTab('overview');
+            if (currentRoute.type === 'repo') {
+              navigateTo(buildRepoUrl(currentRoute.owner, currentRoute.repo, 'overview'), { replace: true });
+            }
+          }
+        }
+      })
+      .catch(() => {
+        // Retain safe defaults if capabilities probe fails
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, currentRoute]);
 
   // Subscribe to browser navigation events (popstate and programmatic navigateTo)
   useEffect(() => {
@@ -109,6 +142,12 @@ export function App() {
       const { owner, repo, tab } = currentRoute;
       const targetKey = `${owner.toLowerCase()}/${repo.toLowerCase()}`;
 
+      // If execution tab is requested while execution capability is disabled, redirect to overview
+      if (tab === 'execution' && !capabilities.execution) {
+        navigateTo(buildRepoUrl(owner, repo, 'overview'), { replace: true });
+        return;
+      }
+
       // If this exact repository is already in memory, just synchronize the active tab
       if (loadedRepoKeyRef.current === targetKey) {
         setActiveTab(tab);
@@ -131,7 +170,7 @@ export function App() {
             const data: AnalysisResult = await res.json();
             setAnalysis(data);
             loadedRepoKeyRef.current = targetKey;
-            setActiveTab(tab);
+            setActiveTab(tab === 'execution' && !capabilities.execution ? 'overview' : tab);
             setUnanalyzedRepo(null);
             setError(null);
           } else if (res.status === 404) {
@@ -175,7 +214,7 @@ export function App() {
         isCancelled = true;
       };
     }
-  }, [currentRoute]);
+  }, [currentRoute, capabilities.execution]);
 
   const handleAnalyze = async (inputToAnalyze?: string) => {
     const target = (inputToAnalyze || repoInput).trim();
@@ -225,6 +264,7 @@ export function App() {
   };
 
   const handleTabChange = (tab: TabId) => {
+    if (tab === 'execution' && !capabilities.execution) return;
     setActiveTab(tab);
     if (analysis) {
       navigateTo(buildRepoUrl(analysis.repository.owner, analysis.repository.name, tab));
@@ -740,21 +780,23 @@ export function App() {
                 </span>
               </button>
 
-              <button
-                role="tab"
-                id="tab-execution"
-                aria-selected={activeTab === 'execution'}
-                aria-controls="panel-execution"
-                onClick={() => handleTabChange('execution')}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
-                  activeTab === 'execution'
-                    ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-                }`}
-              >
-                <Terminal size={14} className="text-emerald-400" />
-                Run & Preview
-              </button>
+              {capabilities.execution && (
+                <button
+                  role="tab"
+                  id="tab-execution"
+                  aria-selected={activeTab === 'execution'}
+                  aria-controls="panel-execution"
+                  onClick={() => handleTabChange('execution')}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                    activeTab === 'execution'
+                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-900/30'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                  }`}
+                >
+                  <Terminal size={14} className="text-emerald-400" />
+                  Run & Preview
+                </button>
+              )}
             </div>
 
             {/* View Panels */}
@@ -804,7 +846,7 @@ export function App() {
                 </div>
               )}
 
-              {activeTab === 'execution' && (
+              {capabilities.execution && activeTab === 'execution' && (
                 <div role="tabpanel" id="panel-execution" aria-labelledby="tab-execution" tabIndex={0}>
                   <ExecutionView repository={analysis.repository} />
                 </div>
