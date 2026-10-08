@@ -12,6 +12,7 @@ import { createRepositoryRoutes } from './routes/repository.routes.js';
 import { RepositoryService } from './services/repository.service.js';
 import { createAiRoutes } from './routes/ai.routes.js';
 import { AIService } from './services/ai/ai.service.js';
+import { ExplanationRunner, explanationRunner } from './services/ai/explanation-runner.js';
 import { createSearchRoutes } from './routes/search.routes.js';
 import { RetrievalService } from './services/retrieval/retrieval.service.js';
 import { createExecutionRoutes } from './routes/execution.routes.js';
@@ -229,6 +230,7 @@ export interface GracefulShutdownOptions {
   timeoutMs?: number;
   wsManager?: WorkspaceManager;
   processRunner?: ProcessSandboxRunner;
+  explanationRunner?: ExplanationRunner;
   closeDb?: (timeoutSeconds?: number) => Promise<void>;
   exitProcess?: boolean;
 }
@@ -249,6 +251,7 @@ export async function gracefulShutdown(options: GracefulShutdownOptions): Promis
     timeoutMs = 10000,
     wsManager = workspaceManager,
     processRunner = processSandboxRunner,
+    explanationRunner: expRunner = explanationRunner,
     closeDb = closeDbConnection,
     exitProcess = true,
   } = options;
@@ -271,15 +274,19 @@ export async function gracefulShutdown(options: GracefulShutdownOptions): Promis
     await app.close();
     app.log.info('HTTP server closed');
 
-    // 2. Clean up active preview workspaces
+    // 2. Abort active explanation generation jobs and clear queue
+    expRunner.abortAll();
+    app.log.info('In-flight explanation jobs aborted');
+
+    // 3. Clean up active preview workspaces
     await wsManager.cleanupAllWorkspaces();
     app.log.info('Execution workspaces cleaned up');
 
-    // 3. Terminate running sandbox processes
+    // 4. Terminate running sandbox processes
     await processRunner.terminateAllProcesses();
     app.log.info('Active sandbox processes terminated');
 
-    // 4. Close database connection pool
+    // 5. Close database connection pool
     await closeDb(5);
     app.log.info('Database connection pool closed');
 
@@ -319,6 +326,16 @@ const start = async () => {
   try {
     await checkDbConnection();
     app.log.info('Database connection verified');
+
+    // Recover stale pending explanation jobs interrupted by previous server runs
+    try {
+      const recoveredCount = await explanationRunner.recoverStalePendingJobs();
+      if (recoveredCount > 0) {
+        app.log.info({ recoveredCount }, 'Recovered stale pending explanation jobs');
+      }
+    } catch (recoverErr) {
+      app.log.warn({ err: recoverErr }, 'Failed to recover stale pending explanation jobs');
+    }
 
     registerShutdownHandlers(app);
 

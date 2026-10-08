@@ -1,6 +1,6 @@
 import { db } from '../../db/index.js';
 import { aiExplanations } from '../../db/schema.js';
-import { eq, and, isNull } from 'drizzle-orm';
+import { eq, and, isNull, lt } from 'drizzle-orm';
 import type { ExplainTopic } from '@archlens/shared';
 import {
   AIRateLimitError,
@@ -33,10 +33,12 @@ export class ExplanationRunner {
   private queue: ExplanationJob[] = [];
   private activeJobs = new Map<string, ExplanationJob>();
   private concurrencyLimit: number;
+  private jobTimeoutMs: number;
   private aiService: AIService | null = null;
 
-  constructor(concurrencyLimit = 2, aiService?: AIService) {
+  constructor(concurrencyLimit = 2, aiService?: AIService, jobTimeoutMs = 18_000) {
     this.concurrencyLimit = concurrencyLimit;
+    this.jobTimeoutMs = jobTimeoutMs;
     if (aiService) {
       this.aiService = aiService;
     }
@@ -94,9 +96,24 @@ export class ExplanationRunner {
     this.activeJobs.set(job.key, job);
 
     (async () => {
+      let timeoutId: ReturnType<typeof setTimeout> | null = null;
+      let isTimedOut = false;
+
       try {
         if (!this.aiService) {
           throw new Error('AIService not attached to ExplanationRunner.');
+        }
+
+        if (this.jobTimeoutMs > 0) {
+          timeoutId = setTimeout(() => {
+            isTimedOut = true;
+            job.abortController.abort(
+              new Error(
+                `Explanation generation exceeded bounded deadline of ${this.jobTimeoutMs / 1000}s.`
+              )
+            );
+          }, this.jobTimeoutMs);
+          if (typeof timeoutId.unref === 'function') timeoutId.unref();
         }
 
         const result = await this.aiService.generateExplanation(
@@ -140,6 +157,11 @@ export class ExplanationRunner {
           job.abortController.signal.aborted ||
           (err instanceof Error &&
             (err.name === 'AbortError' || err.message.toLowerCase().includes('aborted')));
+        const isTimeout =
+          isTimedOut ||
+          (err instanceof Error &&
+            (err.message.toLowerCase().includes('deadline') ||
+              err.message.toLowerCase().includes('timed out')));
         const clientStatus = (err as any)?.status;
         const isAuth = clientStatus === 401;
         const isPermission = clientStatus === 403;
@@ -152,7 +174,10 @@ export class ExplanationRunner {
         let category: string;
         let shouldRetry = true;
 
-        if (isAborted) {
+        if (isTimeout) {
+          category = 'timeout';
+          shouldRetry = true;
+        } else if (isAborted) {
           category = 'abort';
           shouldRetry = false;
         } else if (isAuth) {
@@ -211,6 +236,9 @@ export class ExplanationRunner {
             )
           );
       } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
         this.activeJobs.delete(job.key);
         this.processNext();
       }
@@ -224,6 +252,44 @@ export class ExplanationRunner {
       this.activeJobs.delete(key);
     }
     this.queue = this.queue.filter((j) => j.key !== key);
+  }
+
+  abortAll(): void {
+    for (const job of this.activeJobs.values()) {
+      try {
+        job.abortController.abort(new Error('Explanation runner aborting all jobs'));
+      } catch {
+        // ignore abort errors
+      }
+    }
+    this.activeJobs.clear();
+    this.queue = [];
+  }
+
+  /**
+   * Recovers stale pending jobs from previous server runs or process termination.
+   * Prevents UI from being permanently stuck in 'pending' state.
+   */
+  async recoverStalePendingJobs(staleThresholdMs = 120_000): Promise<number> {
+    const cutoff = new Date(Date.now() - staleThresholdMs);
+    const updated = await db
+      .update(aiExplanations)
+      .set({
+        status: 'failed',
+        lastErrorCategory: 'interrupted',
+        lastErrorMessage:
+          'Explanation generation was interrupted by server restart or process termination.',
+        retryAt: new Date(),
+      })
+      .where(
+        and(
+          eq(aiExplanations.status, 'pending'),
+          lt(aiExplanations.createdAt, cutoff)
+        )
+      )
+      .returning({ id: aiExplanations.id });
+
+    return updated.length;
   }
 
   getQueueLength(): number {

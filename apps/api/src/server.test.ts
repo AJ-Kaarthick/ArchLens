@@ -68,6 +68,10 @@ describe('Server Infrastructure & Observability', () => {
         terminateAllProcesses: vi.fn().mockResolvedValue(undefined),
       } as unknown as ProcessSandboxRunner;
 
+      const mockExplanationRunner = {
+        abortAll: vi.fn(),
+      } as any;
+
       const mockCloseDb = vi.fn().mockResolvedValue(undefined);
 
       await gracefulShutdown({
@@ -76,10 +80,12 @@ describe('Server Infrastructure & Observability', () => {
         timeoutMs: 5000,
         wsManager: mockWsManager,
         processRunner: mockProcessRunner,
+        explanationRunner: mockExplanationRunner,
         closeDb: mockCloseDb,
         exitProcess: false, // Don't terminate the test runner process
       });
 
+      expect(mockExplanationRunner.abortAll).toHaveBeenCalledTimes(1);
       expect(mockWsManager.cleanupAllWorkspaces).toHaveBeenCalledTimes(1);
       expect(mockProcessRunner.terminateAllProcesses).toHaveBeenCalledTimes(1);
       expect(mockCloseDb).toHaveBeenCalledTimes(1);
