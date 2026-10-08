@@ -14,6 +14,8 @@ export function sanitizeErrorMessage(message: unknown): string {
     process.env.GEMINI_API_KEY,
     process.env.GEMINI_FALLBACK_API_KEY,
     process.env.GEMINI_TERTIARY_API_KEY,
+    process.env.AI_FALLBACK_API_KEY,
+    process.env.OPENAI_API_KEY,
     process.env.GITHUB_TOKEN,
   ];
 

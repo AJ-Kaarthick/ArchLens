@@ -315,11 +315,9 @@ export class GeminiAIProvider implements IAIProvider {
       this.fallbackClient = new GoogleGenAI({ apiKey: fallbackKey });
     }
 
-    // Tertiary model & API key configuration (tertiary fallback: 3.6-flash)
-    const tertiaryKey =
-      options.tertiaryApiKey ||
-      process.env.GEMINI_TERTIARY_API_KEY ||
-      (options.tertiaryModel ? fallbackKey || apiKey : undefined);
+    // Tertiary fallback is disabled by default to prevent probing multiple dead models.
+    // Retains at most one fallback model (gemini-3.7-flash) before failing to independent provider.
+    const tertiaryKey = options.tertiaryApiKey || process.env.GEMINI_TERTIARY_API_KEY;
     this.tertiaryApiKey = tertiaryKey;
     this.tertiaryModel =
       options.tertiaryModel || process.env.GEMINI_TERTIARY_MODEL || 'gemini-3.6-flash';

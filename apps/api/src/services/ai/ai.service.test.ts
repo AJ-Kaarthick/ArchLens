@@ -7,6 +7,8 @@ import { initDb, sql, db } from '../../db/index.js';
 import { repositories, analyses, aiExplanations } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 import type { AnalysisResult } from '@archlens/shared';
+import { ResilientFallbackProvider } from './providers/resilient-fallback.provider.js';
+import { CircuitBreaker } from './circuit-breaker.js';
 
 describe('AIService', () => {
   beforeAll(async () => {
@@ -746,6 +748,116 @@ describe('AIService', () => {
     expect(insight.error?.isRateLimit).toBe(true);
     expect(insight.retryAt).toBe(futureRetryAt.toISOString());
     expect(mockRunner.enqueue).not.toHaveBeenCalled();
+
+    await db.delete(repositories).where(eq(repositories.id, repoRow.id));
+  });
+
+  it('seamlessly falls back to independent provider when primary provider fails with 503', async () => {
+    const testOwner = `ai-fallback-${Date.now()}`;
+    const testRepo = 'fallback-repo';
+
+    const [repoRow] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        description: 'Test fallback repository',
+        stars: 5,
+        forks: 0,
+        primaryLanguage: 'TypeScript',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const mockAnalysis: AnalysisResult = {
+      repository: {
+        id: String(repoRow.id),
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        description: 'Test fallback repository',
+        stars: 5,
+        forks: 0,
+        primaryLanguage: 'TypeScript',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      commitSha: 'sha-fb-789',
+      techStack: [],
+      architecture: {
+        isMonorepo: false,
+        monorepoTool: null,
+        workspaces: [],
+        detectedPatterns: ['Modular Monolith'],
+        primaryEntrypoints: ['src/main.ts'],
+        keyLandmarks: [
+          {
+            path: 'package.json',
+            name: 'package.json',
+            type: 'manifest',
+            description: 'Root manifest',
+          },
+        ],
+      },
+      metrics: {
+        totalFiles: 10,
+        totalBytes: 5000,
+        languages: { TypeScript: { bytes: 5000, percentage: 100, fileCount: 10 } },
+        categories: { source: { bytes: 5000, percentage: 100, fileCount: 10 } },
+        largestFiles: [{ path: 'src/main.ts', size: 500 }],
+      },
+      tree: [],
+      analyzedAt: new Date().toISOString(),
+    };
+
+    const mockRepoService = {
+      getLatestAnalysisWithRecord: vi.fn().mockResolvedValue({
+        analysis: mockAnalysis,
+        analysisId: 1,
+        repositoryId: repoRow.id,
+      }),
+      getLandmarkContent: vi.fn().mockResolvedValue(null),
+    } as unknown as RepositoryService;
+
+    // Primary Gemini provider throws 503
+    const mockPrimary = {
+      name: 'gemini',
+      model: 'gemini-3.8-flash',
+      explain: vi.fn().mockRejectedValue(new Error('503 Service Unavailable')),
+    };
+
+    // Fallback independent provider succeeds
+    const mockFallback = {
+      name: 'openai-compatible',
+      model: 'gpt-4o-mini',
+      explain: vi.fn().mockResolvedValue({
+        summary: 'Fallback generated summary',
+        explanation: 'Detailed explanation from fallback provider',
+        keyTakeaways: ['Resilience achieved'],
+        evidence: [],
+        provider: 'openai-compatible',
+        model: 'gpt-4o-mini',
+      }),
+    };
+
+    const resilient = new ResilientFallbackProvider([
+      { provider: mockPrimary, breaker: new CircuitBreaker({ name: 'gemini' }) },
+      { provider: mockFallback, breaker: new CircuitBreaker({ name: 'openai-compatible' }) },
+    ]);
+
+    const service = new AIService(resilient, mockRepoService);
+
+    const explanation = await service.generateExplanation(testOwner, testRepo, 'overview');
+
+    expect(explanation.summary).toBe('Fallback generated summary');
+    expect(explanation.provider).toBe('openai-compatible');
+    expect(explanation.model).toBe('gpt-4o-mini');
+    expect(mockPrimary.explain).toHaveBeenCalledTimes(1);
+    expect(mockFallback.explain).toHaveBeenCalledTimes(1);
 
     await db.delete(repositories).where(eq(repositories.id, repoRow.id));
   });
