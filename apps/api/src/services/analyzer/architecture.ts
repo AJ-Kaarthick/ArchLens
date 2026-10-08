@@ -8,11 +8,11 @@ export function detectArchitecture(
 ): ArchitectureOverview {
   const paths = tree.map((t) => t.path);
   const patterns: string[] = [];
-  const workspaces: string[] = [];
+  const workspacesSet = new Set<string>();
   let isMonorepo = false;
   let monorepoTool: string | null = null;
 
-  // 1. Monorepo Detection
+  // 1. Monorepo & Workspace Manifest Detection
   if (paths.some((p) => p === 'pnpm-workspace.yaml')) {
     isMonorepo = true;
     monorepoTool = 'pnpm workspaces';
@@ -26,8 +26,8 @@ export function detectArchitecture(
       }
       if (inPackages) {
         if (line.trim().startsWith('-')) {
-          const match = line.match(/-\s*["']?([^"']+)["']?/);
-          if (match) workspaces.push(match[1].trim());
+          const match = line.match(/-\s*["']?([^"'\s]+)["']?/);
+          if (match) workspacesSet.add(match[1].trim());
         } else if (line.trim().length > 0 && !line.startsWith(' ') && !line.startsWith('\t')) {
           break;
         }
@@ -52,21 +52,103 @@ export function detectArchitecture(
         isMonorepo = true;
         monorepoTool = 'npm/yarn workspaces';
         if (Array.isArray(pkg.workspaces)) {
-          workspaces.push(...pkg.workspaces);
+          pkg.workspaces.forEach((w: string) => workspacesSet.add(w));
         } else if (Array.isArray(pkg.workspaces.packages)) {
-          workspaces.push(...pkg.workspaces.packages);
+          pkg.workspaces.packages.forEach((w: string) => workspacesSet.add(w));
         }
       }
     } catch {
-      // ignore parse error
+      // ignore JSON parse error
     }
   }
 
-  // Fallback workspace detection if directory layout is apps/* or packages/*
-  if (isMonorepo && workspaces.length === 0) {
-    if (paths.some((p) => p.startsWith('apps/'))) workspaces.push('apps/*');
-    if (paths.some((p) => p.startsWith('packages/'))) workspaces.push('packages/*');
+  // Check for Cargo workspace
+  if (manifestContents['Cargo.toml'] && manifestContents['Cargo.toml'].includes('[workspace]')) {
+    isMonorepo = true;
+    if (!monorepoTool) monorepoTool = 'Cargo workspace';
+    const cargoLines = manifestContents['Cargo.toml'].split('\n');
+    let inMembers = false;
+    for (const line of cargoLines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('members') && trimmed.includes('=')) {
+        inMembers = true;
+      }
+      if (inMembers) {
+        const matches = trimmed.matchAll(/["']([^"']+)["']/g);
+        for (const match of matches) {
+          workspacesSet.add(match[1]);
+        }
+        if (trimmed.includes(']')) {
+          inMembers = false;
+        }
+      }
+    }
   }
+
+  // Check for Go workspaces (go.work)
+  if (paths.some((p) => p === 'go.work')) {
+    isMonorepo = true;
+    if (!monorepoTool) monorepoTool = 'Go workspaces';
+    const workContent = manifestContents['go.work'] || '';
+    const workLines = workContent.split('\n');
+    let inUse = false;
+    for (const line of workLines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('use (')) {
+        inUse = true;
+        continue;
+      }
+      if (inUse) {
+        if (trimmed.startsWith(')')) {
+          inUse = false;
+          continue;
+        }
+        if (trimmed && !trimmed.startsWith('//')) {
+          workspacesSet.add(trimmed.replace(/^.\//, ''));
+        }
+      }
+    }
+  }
+
+  // Workspace package discovery from nested manifests
+  const nestedManifestDirs = new Set<string>();
+  for (const filePath of Object.keys(manifestContents)) {
+    if (filePath.includes('/')) {
+      const lastSlash = filePath.lastIndexOf('/');
+      const dir = filePath.substring(0, lastSlash);
+      if (
+        dir &&
+        !dir.startsWith('node_modules') &&
+        !dir.startsWith('vendor') &&
+        !dir.startsWith('dist')
+      ) {
+        nestedManifestDirs.add(dir);
+      }
+    }
+  }
+
+  // If >= 2 distinct subdirectories contain package manifests, it is a monorepo
+  if (nestedManifestDirs.size >= 2) {
+    isMonorepo = true;
+    if (!monorepoTool) {
+      monorepoTool = 'Multi-package repository';
+    }
+  }
+
+  // Populate workspace paths from actual discovered package directories and declared globs
+  if (isMonorepo) {
+    for (const dir of nestedManifestDirs) {
+      workspacesSet.add(dir);
+    }
+    if (workspacesSet.size === 0) {
+      if (paths.some((p) => p.startsWith('apps/'))) workspacesSet.add('apps/*');
+      if (paths.some((p) => p.startsWith('packages/'))) workspacesSet.add('packages/*');
+      if (paths.some((p) => p.startsWith('crates/'))) workspacesSet.add('crates/*');
+      if (paths.some((p) => p.startsWith('services/'))) workspacesSet.add('services/*');
+    }
+  }
+
+  const workspaces = Array.from(workspacesSet).sort();
 
   // 2. Pattern Detections
   if (isMonorepo) {
@@ -131,7 +213,7 @@ export function detectArchitecture(
     patterns.push('Automated CI/CD');
   }
 
-  // 3. Primary Entrypoints
+  // 3. Primary Entrypoints Discovery
   const primaryEntrypoints: string[] = [];
   const entryCandidates = [
     'src/index.ts',
@@ -143,40 +225,49 @@ export function detectArchitecture(
     'apps/api/src/server.ts',
     'apps/web/src/main.tsx',
     'apps/web/src/App.tsx',
+    'packages/shared/src/index.ts',
     'main.go',
+    'cmd/main.go',
     'main.py',
     'app.py',
     'index.html',
+    'src/main.rs',
+    'src/lib.rs',
   ];
 
   for (const candidate of entryCandidates) {
-    if (paths.includes(candidate)) {
+    if (paths.includes(candidate) && !primaryEntrypoints.includes(candidate)) {
       primaryEntrypoints.push(candidate);
     }
   }
 
-  // If none matched candidates, look for entry landmarks in the tree
-  if (primaryEntrypoints.length === 0) {
-    for (const p of paths) {
-      const lm = detectLandmark(p);
-      if (lm && lm.type === 'entry') {
+  // Search for package-level entrypoints in monorepos
+  for (const p of paths) {
+    if (
+      (p.startsWith('packages/') || p.startsWith('crates/') || p.startsWith('services/')) &&
+      (p.endsWith('/index.js') ||
+        p.endsWith('/index.ts') ||
+        p.endsWith('/main.go') ||
+        p.endsWith('/main.rs') ||
+        p.endsWith('/lib.rs') ||
+        p.endsWith('/app.py') ||
+        p.endsWith('/main.py')) &&
+      !p.includes('/test') &&
+      !p.includes('/fixture') &&
+      !p.includes('/__')
+    ) {
+      if (!primaryEntrypoints.includes(p)) {
         primaryEntrypoints.push(p);
-        if (primaryEntrypoints.length >= 5) break;
       }
     }
   }
 
-  // 4. Key Landmarks
+  // 4. Key Landmarks Discovery
   const keyLandmarks: LandmarkInfo[] = [];
-  const seenLandmarks = new Set<string>();
-
-  for (const item of tree) {
-    if (item.type === 'blob') {
-      const lm = detectLandmark(item.path);
-      if (lm && !seenLandmarks.has(lm.path)) {
-        seenLandmarks.add(lm.path);
-        keyLandmarks.push(lm);
-      }
+  for (const p of paths) {
+    const landmark = detectLandmark(p);
+    if (landmark) {
+      keyLandmarks.push(landmark);
     }
   }
 

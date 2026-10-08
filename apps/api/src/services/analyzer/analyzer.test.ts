@@ -264,4 +264,232 @@ describe('Deterministic Analyzer', () => {
       expect(result.analyzedAt).toBeDefined();
     });
   });
+
+  describe('Workspace-Aware Ecosystem Fixtures', () => {
+    const dummyRepoMeta: RepositoryMetadata = {
+      id: '1',
+      owner: 'test',
+      name: 'fixture-repo',
+      url: 'https://github.com/test/fixture-repo',
+      defaultBranch: 'main',
+      description: 'Fixture',
+      stars: 1,
+      forks: 0,
+      primaryLanguage: null,
+      createdAt: '2024-01-01T00:00:00Z',
+      updatedAt: '2024-01-01T00:00:00Z',
+    };
+
+    const makeBlob = (path: string, size = 100): RawGitTreeItem => ({
+      path,
+      mode: '100644',
+      type: 'blob',
+      sha: 'fake-sha',
+      size,
+    });
+
+    it('Fixture 1: normal single-package repository', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('package.json'),
+        makeBlob('src/server.ts'),
+        makeBlob('tests/server.test.ts'),
+      ];
+      const manifestContents = {
+        'package.json': JSON.stringify({
+          dependencies: { express: '^4.19.2' },
+          devDependencies: { jest: '^29.7.0', typescript: '^5.4.5' },
+        }),
+      };
+
+      const result = analyzeRepositoryData({
+        repository: dummyRepoMeta,
+        commitSha: 'sha-single',
+        rawTree: tree,
+        manifestContents,
+      });
+
+      expect(result.architecture.isMonorepo).toBe(false);
+      expect(result.architecture.workspaces).toHaveLength(0);
+      expect(result.techStack.some((t) => t.name === 'Express')).toBe(true);
+      expect(result.techStack.some((t) => t.name === 'Jest')).toBe(true);
+      expect(result.architecture.primaryEntrypoints).toContain('src/server.ts');
+    });
+
+    it('Fixture 2: pnpm monorepo with multiple apps and shared packages', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('pnpm-workspace.yaml'),
+        makeBlob('package.json'),
+        makeBlob('apps/api/package.json'),
+        makeBlob('apps/api/src/server.ts'),
+        makeBlob('apps/web/package.json'),
+        makeBlob('apps/web/src/main.tsx'),
+        makeBlob('packages/shared/package.json'),
+        makeBlob('packages/shared/src/index.ts'),
+      ];
+
+      const manifestContents = {
+        'pnpm-workspace.yaml': 'packages:\n  - "apps/*"\n  - "packages/*"',
+        'package.json': JSON.stringify({ devDependencies: { turbo: '^1.13.0' } }),
+        'apps/api/package.json': JSON.stringify({
+          dependencies: { fastify: '^4.26.2', 'drizzle-orm': '^0.30.7' },
+        }),
+        'apps/web/package.json': JSON.stringify({
+          dependencies: { react: '^18.2.0', tailwindcss: '^3.4.1' },
+          devDependencies: { vite: '^5.2.0' },
+        }),
+        'packages/shared/package.json': JSON.stringify({
+          dependencies: { zod: '^3.22.4' },
+        }),
+      };
+
+      const result = analyzeRepositoryData({
+        repository: dummyRepoMeta,
+        commitSha: 'sha-pnpm',
+        rawTree: tree,
+        manifestContents,
+      });
+
+      expect(result.architecture.isMonorepo).toBe(true);
+      expect(result.architecture.monorepoTool).toBe('pnpm workspaces');
+      expect(result.architecture.workspaces).toEqual(
+        expect.arrayContaining(['apps/api', 'apps/web', 'packages/shared'])
+      );
+
+      // Verify nested manifest dependencies are detected and attributed to their workspace
+      const fastify = result.techStack.find((t) => t.name === 'Fastify');
+      expect(fastify).toBeDefined();
+      expect(fastify?.evidence).toContain('apps/api/package.json');
+
+      const react = result.techStack.find((t) => t.name === 'React');
+      expect(react).toBeDefined();
+      expect(react?.evidence).toContain('apps/web/package.json');
+
+      const zod = result.techStack.find((t) => t.name === 'Zod');
+      expect(zod).toBeDefined();
+      expect(zod?.evidence).toContain('packages/shared/package.json');
+
+      expect(result.architecture.primaryEntrypoints).toContain('apps/api/src/server.ts');
+      expect(result.architecture.primaryEntrypoints).toContain('apps/web/src/main.tsx');
+    });
+
+    it('Fixture 3: Python multi-package repository with requirements and pyproject', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('services/api/requirements.txt'),
+        makeBlob('services/api/main.py'),
+        makeBlob('services/worker/pyproject.toml'),
+        makeBlob('services/worker/app.py'),
+      ];
+
+      const manifestContents = {
+        'services/api/requirements.txt': `
+# Web service dependencies
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+sqlalchemy==2.0.29
+pytest>=8.1.1
+`,
+        'services/worker/pyproject.toml': `
+[project]
+name = "worker"
+dependencies = [
+    "celery>=5.3.6",
+    "redis>=5.0.3",
+]
+`,
+      };
+
+      const result = analyzeRepositoryData({
+        repository: dummyRepoMeta,
+        commitSha: 'sha-py',
+        rawTree: tree,
+        manifestContents,
+      });
+
+      expect(result.architecture.isMonorepo).toBe(true);
+      expect(result.techStack.some((t) => t.name === 'Python')).toBe(true);
+      expect(result.techStack.some((t) => t.name === 'FastAPI')).toBe(true);
+      expect(result.techStack.some((t) => t.name === 'SQLAlchemy')).toBe(true);
+      expect(result.techStack.some((t) => t.name === 'Celery')).toBe(true);
+      expect(result.techStack.some((t) => t.name === 'Redis')).toBe(true);
+
+      const fastapi = result.techStack.find((t) => t.name === 'FastAPI');
+      expect(fastapi?.evidence).toContain('services/api/requirements.txt');
+    });
+
+    it('Fixture 4: Cargo workspace with member crates', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('Cargo.toml'),
+        makeBlob('crates/server/Cargo.toml'),
+        makeBlob('crates/server/src/main.rs'),
+        makeBlob('crates/core/Cargo.toml'),
+        makeBlob('crates/core/src/lib.rs'),
+      ];
+
+      const manifestContents = {
+        'Cargo.toml': `
+[workspace]
+members = [
+    "crates/server",
+    "crates/core",
+]
+`,
+        'crates/server/Cargo.toml': `
+[package]
+name = "server"
+version = "0.1.0"
+
+[dependencies]
+axum = "0.7.5"
+tokio = { version = "1.38", features = ["full"] }
+`,
+        'crates/core/Cargo.toml': `
+[package]
+name = "core"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0.203"
+`,
+      };
+
+      const result = analyzeRepositoryData({
+        repository: dummyRepoMeta,
+        commitSha: 'sha-cargo',
+        rawTree: tree,
+        manifestContents,
+      });
+
+      expect(result.architecture.isMonorepo).toBe(true);
+      expect(result.architecture.monorepoTool).toBe('Cargo workspace');
+      expect(result.architecture.workspaces).toContain('crates/server');
+      expect(result.architecture.workspaces).toContain('crates/core');
+
+      expect(result.techStack.some((t) => t.name === 'Rust')).toBe(true);
+      expect(result.techStack.some((t) => t.name === 'Axum')).toBe(true);
+      expect(result.techStack.some((t) => t.name === 'Tokio')).toBe(true);
+      expect(result.techStack.some((t) => t.name === 'Serde')).toBe(true);
+
+      const axum = result.techStack.find((t) => t.name === 'Axum');
+      expect(axum?.evidence).toContain('crates/server/Cargo.toml');
+    });
+
+    it('avoids false positive substring detections', () => {
+      // Mentioning "flask" in a random string or comment without dependency declaration
+      const manifestContents = {
+        'requirements.txt': `
+# We used to consider flask-helpers, but now we use something else
+requests==2.31.0
+`,
+      };
+
+      const result = analyzeRepositoryData({
+        repository: dummyRepoMeta,
+        commitSha: 'sha-clean',
+        rawTree: [makeBlob('requirements.txt')],
+        manifestContents,
+      });
+
+      expect(result.techStack.some((t) => t.name === 'Flask')).toBe(false);
+    });
+  });
 });

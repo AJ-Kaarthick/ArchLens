@@ -9,6 +9,7 @@ import { db } from '../db/index.js';
 import { repositories, analyses } from '../db/schema.js';
 import { githubService, GitHubService } from './github.service.js';
 import { analyzeRepositoryData } from './analyzer/index.js';
+import { selectManifestPathsToFetch, runWithConcurrency } from './analyzer/manifest-selector.js';
 
 export class RepositoryService {
   private gh: GitHubService;
@@ -223,39 +224,30 @@ export class RepositoryService {
     const treeResult = await this.gh.getGitTree(cleanOwner, cleanRepo, treeRef);
     timings.tree = Date.now() - tTree;
 
-    // 4. Fetch key manifests for deeper dependency inspection
+    // 4. Fetch bounded manifests (workspace-aware, capped at 25 manifests) with bounded concurrency (4 parallel workers)
     const tManifests = Date.now();
     const manifestContents: Record<string, string> = {};
-    const keyManifestPaths = [
-      'package.json',
-      'pnpm-workspace.yaml',
-      'Cargo.toml',
-      'go.mod',
-      'pyproject.toml',
-      'requirements.txt',
-    ];
+    const candidateManifestPaths = selectManifestPathsToFetch(treeResult.tree, 25);
 
-    for (const item of treeResult.tree) {
-      if (item.type === 'blob' && keyManifestPaths.includes(item.path)) {
-        try {
-          const file = await this.gh.getFileContent(
-            cleanOwner,
-            cleanRepo,
-            item.path,
-            currentCommitSha
-          );
-          if (!file.isTruncated) {
-            manifestContents[item.path] = file.content;
-          }
-        } catch (err: unknown) {
-          console.warn(
-            `[RepositoryService] Optional manifest '${item.path}' failed to load for ${cleanOwner}/${cleanRepo}: ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          );
+    await runWithConcurrency(candidateManifestPaths, 4, async (manifestPath) => {
+      try {
+        const file = await this.gh.getFileContent(
+          cleanOwner,
+          cleanRepo,
+          manifestPath,
+          currentCommitSha
+        );
+        if (!file.isTruncated) {
+          manifestContents[manifestPath] = file.content;
         }
+      } catch (err: unknown) {
+        console.warn(
+          `[RepositoryService] Optional manifest '${manifestPath}' failed to load for ${cleanOwner}/${cleanRepo}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
       }
-    }
+    });
     timings.manifests = Date.now() - tManifests;
 
     // 5. Perform deterministic analysis with the REAL commit SHA
