@@ -420,5 +420,123 @@ describe('AI Fastify Routes', () => {
         true
       );
     });
+
+    it('returns 400 when target is excessively long (>200 chars)', async () => {
+      const mockAiService = { getOrEnqueueInsight: vi.fn() } as unknown as AIService;
+      const app = buildApp({ aiService: mockAiService });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/repositories/facebook/react/insights/overview/retry',
+        payload: { target: 'a'.repeat(201) },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('ValidationError');
+      expect(mockAiService.getOrEnqueueInsight).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when target contains control characters', async () => {
+      const mockAiService = { getOrEnqueueInsight: vi.fn() } as unknown as AIService;
+      const app = buildApp({ aiService: mockAiService });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/repositories/facebook/react/insights/overview/retry',
+        payload: { target: 'some\0nullbyte' },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('ValidationError');
+      expect(mockAiService.getOrEnqueueInsight).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 when promptVersion is invalid', async () => {
+      const mockAiService = { getOrEnqueueInsight: vi.fn() } as unknown as AIService;
+      const app = buildApp({ aiService: mockAiService });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/repositories/facebook/react/insights/overview/retry',
+        payload: { promptVersion: 99 },
+      });
+
+      expect(response.statusCode).toBe(400);
+      const body = JSON.parse(response.body);
+      expect(body.error).toBe('ValidationError');
+      expect(mockAiService.getOrEnqueueInsight).not.toHaveBeenCalled();
+    });
+
+    it('enforces rate limits on retry route', async () => {
+      const mockAiService = {
+        getOrEnqueueInsight: vi.fn().mockResolvedValue({
+          status: 'pending',
+          topic: 'overview',
+          target: null,
+          result: null,
+          isStale: false,
+          promptVersion: 1,
+        }),
+      } as unknown as AIService;
+
+      const app = buildApp({
+        aiService: mockAiService,
+        rateLimitConfig: {
+          analyzeMax: 10,
+          executeMax: 10,
+          explainMax: 1,
+          searchMax: 10,
+          generalMax: 10,
+          timeWindowMs: 60000,
+        },
+      });
+
+      // 1st request succeeds
+      const res1 = await app.inject({
+        method: 'POST',
+        url: '/api/repositories/facebook/react/insights/overview/retry',
+        payload: {},
+      });
+      expect(res1.statusCode).toBe(200);
+
+      // 2nd request exceeds explainMax limit
+      const res2 = await app.inject({
+        method: 'POST',
+        url: '/api/repositories/facebook/react/insights/overview/retry',
+        payload: {},
+      });
+      expect(res2.statusCode).toBe(429);
+      expect(JSON.parse(res2.body).error).toBe('RateLimitExceeded');
+    });
+  });
+
+  describe('Abuse controls on GET /api/repositories/:owner/:repo/insights/:topic', () => {
+    it('returns 400 when target in query string exceeds 200 chars', async () => {
+      const mockAiService = { getOrEnqueueInsight: vi.fn() } as unknown as AIService;
+      const app = buildApp({ aiService: mockAiService });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/repositories/facebook/react/insights/overview?target=${'x'.repeat(201)}`,
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(JSON.parse(response.body).error).toBe('ValidationError');
+    });
+
+    it('returns 400 when promptVersion in query string is invalid', async () => {
+      const mockAiService = { getOrEnqueueInsight: vi.fn() } as unknown as AIService;
+      const app = buildApp({ aiService: mockAiService });
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/repositories/facebook/react/insights/overview?promptVersion=999',
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect(JSON.parse(response.body).error).toBe('ValidationError');
+    });
   });
 });

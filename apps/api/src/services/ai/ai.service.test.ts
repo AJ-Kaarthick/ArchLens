@@ -536,4 +536,217 @@ describe('AIService', () => {
 
     await db.delete(repositories).where(eq(repositories.id, repoRow.id));
   });
+
+  it('enforces 60-second cooldown on ready explanations when forceRetry=true', async () => {
+    const testOwner = `cooldown-owner-${Date.now()}`;
+    const testRepo = 'cooldown-repo';
+
+    const [repoRow] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        description: 'Cooldown test repo',
+        stars: 1,
+        forks: 0,
+        primaryLanguage: 'TypeScript',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const mockAnalysis: AnalysisResult = {
+      repository: {
+        id: String(repoRow.id),
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        description: 'Cooldown test repo',
+        stars: 1,
+        forks: 0,
+        primaryLanguage: 'TypeScript',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      tree: [],
+      techStack: [],
+      metrics: { totalFiles: 1, totalBytes: 100, languages: {}, categories: {}, largestFiles: [] },
+      architecture: {
+        isMonorepo: false,
+        monorepoTool: null,
+        workspaces: [],
+        detectedPatterns: [],
+        primaryEntrypoints: [],
+        keyLandmarks: [],
+      },
+      commitSha: 'sha-cooldown-123',
+      analyzedAt: new Date().toISOString(),
+    };
+
+    const [analysisRow] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repoRow.id,
+        commitSha: 'sha-cooldown-123',
+        techStack: [],
+        architecture: mockAnalysis.architecture,
+        metrics: mockAnalysis.metrics,
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    // Insert an explanation that was created 10 seconds ago (cooldown is 60s)
+    await db
+      .insert(aiExplanations)
+      .values({
+        repositoryId: repoRow.id,
+        analysisId: analysisRow.id,
+        commitSha: 'sha-cooldown-123',
+        topic: 'overview',
+        target: null,
+        promptVersion: 1,
+        status: 'ready',
+        summary: 'Original Ready Summary',
+        explanation: 'Original Ready Explanation',
+        keyTakeaways: ['Takeaway A'],
+        createdAt: new Date(Date.now() - 10_000),
+      })
+      .returning();
+
+    const mockRepoService = {
+      getLatestAnalysisWithRecord: vi.fn().mockResolvedValue({
+        analysis: mockAnalysis,
+        analysisId: analysisRow.id,
+        repositoryId: repoRow.id,
+      }),
+    } as unknown as RepositoryService;
+
+    const mockRunner = {
+      enqueue: vi.fn(),
+      setAiService: vi.fn(),
+    };
+
+    const service = new AIService(undefined, mockRepoService, undefined, mockRunner as any);
+
+    // Call getOrEnqueueInsight with forceRetry=true
+    const insight = await service.getOrEnqueueInsight(testOwner, testRepo, 'overview', null, 1, true);
+
+    // Should return cached ready result and NOT enqueue because cooldown is active
+    expect(insight.status).toBe('ready');
+    expect(insight.result?.summary).toBe('Original Ready Summary');
+    expect(mockRunner.enqueue).not.toHaveBeenCalled();
+
+    await db.delete(repositories).where(eq(repositories.id, repoRow.id));
+  });
+
+  it('respects retryAt backoff on failed explanations even when forceRetry=true', async () => {
+    const testOwner = `backoff-owner-${Date.now()}`;
+    const testRepo = 'backoff-repo';
+
+    const [repoRow] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        description: 'Backoff test repo',
+        stars: 1,
+        forks: 0,
+        primaryLanguage: 'TypeScript',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const mockAnalysis: AnalysisResult = {
+      repository: {
+        id: String(repoRow.id),
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        description: 'Backoff test repo',
+        stars: 1,
+        forks: 0,
+        primaryLanguage: 'TypeScript',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      tree: [],
+      techStack: [],
+      metrics: { totalFiles: 1, totalBytes: 100, languages: {}, categories: {}, largestFiles: [] },
+      architecture: {
+        isMonorepo: false,
+        monorepoTool: null,
+        workspaces: [],
+        detectedPatterns: [],
+        primaryEntrypoints: [],
+        keyLandmarks: [],
+      },
+      commitSha: 'sha-backoff-456',
+      analyzedAt: new Date().toISOString(),
+    };
+
+    const [analysisRow] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repoRow.id,
+        commitSha: 'sha-backoff-456',
+        techStack: [],
+        architecture: mockAnalysis.architecture,
+        metrics: mockAnalysis.metrics,
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    // Failed explanation with retryAt 30 seconds into the future
+    const futureRetryAt = new Date(Date.now() + 30_000);
+    await db
+      .insert(aiExplanations)
+      .values({
+        repositoryId: repoRow.id,
+        analysisId: analysisRow.id,
+        commitSha: 'sha-backoff-456',
+        topic: 'overview',
+        target: null,
+        promptVersion: 1,
+        status: 'failed',
+        lastErrorCategory: 'rate_limit',
+        lastErrorMessage: 'Rate limit exceeded',
+        retryAt: futureRetryAt,
+        createdAt: new Date(),
+      });
+
+    const mockRepoService = {
+      getLatestAnalysisWithRecord: vi.fn().mockResolvedValue({
+        analysis: mockAnalysis,
+        analysisId: analysisRow.id,
+        repositoryId: repoRow.id,
+      }),
+    } as unknown as RepositoryService;
+
+    const mockRunner = {
+      enqueue: vi.fn(),
+      setAiService: vi.fn(),
+    };
+
+    const service = new AIService(undefined, mockRepoService, undefined, mockRunner as any);
+
+    // Call getOrEnqueueInsight with forceRetry=true while still in backoff
+    const insight = await service.getOrEnqueueInsight(testOwner, testRepo, 'overview', null, 1, true);
+
+    // Must remain failed, returning retryAt, and NOT re-enqueuing
+    expect(insight.status).toBe('failed');
+    expect(insight.error?.isRateLimit).toBe(true);
+    expect(insight.retryAt).toBe(futureRetryAt.toISOString());
+    expect(mockRunner.enqueue).not.toHaveBeenCalled();
+
+    await db.delete(repositories).where(eq(repositories.id, repoRow.id));
+  });
 });

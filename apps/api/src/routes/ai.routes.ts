@@ -1,11 +1,18 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { ExplainRequestSchema, ExplainTopicSchema, type ApiError } from '@archlens/shared';
+import {
+  ExplainRequestSchema,
+  ExplainTopicSchema,
+  InsightQuerySchema,
+  InsightRetryBodySchema,
+  type ApiError,
+} from '@archlens/shared';
 import { aiService, AIService, RepositoryNotAnalyzedError } from '../services/ai/ai.service.js';
 import {
   AIRateLimitError,
   AITemporaryUnavailableError,
 } from '../services/ai/provider.interface.js';
 import { getRateLimitConfig, type RateLimitConfig } from '../config/rate-limit.js';
+import { sanitizeErrorMessage } from '../services/ai/sanitize-error.js';
 
 export function createAiRoutes(
   customService?: AIService,
@@ -140,7 +147,7 @@ export function createAiRoutes(
         ) {
           const errorResponse: ApiError = {
             error: 'RateLimitExceeded',
-            message: (err as any).message || 'AI provider rate limit or quota exceeded.',
+            message: sanitizeErrorMessage((err as any).message || 'AI provider rate limit or quota exceeded.'),
             isRateLimit: true,
             suggestedAction:
               (err as any).suggestedAction ||
@@ -159,9 +166,10 @@ export function createAiRoutes(
         ) {
           const errorResponse: ApiError = {
             error: 'AITemporarilyUnavailable',
-            message:
+            message: sanitizeErrorMessage(
               (err as any).message ||
-              'The AI explanation service is temporarily unavailable. Please try again shortly.',
+                'The AI explanation service is temporarily unavailable. Please try again shortly.'
+            ),
             isRateLimit: false,
             suggestedAction:
               (err as any).suggestedAction ||
@@ -174,7 +182,7 @@ export function createAiRoutes(
         if (clientStatus === 400) {
           const errorResponse: ApiError = {
             error: 'InvalidAIRequest',
-            message: (err as any).message || 'Invalid AI request parameters.',
+            message: sanitizeErrorMessage((err as any).message || 'Invalid AI request parameters.'),
             isRateLimit: false,
             suggestedAction: 'Check the repository structure or request parameters.',
           };
@@ -219,6 +227,14 @@ export function createAiRoutes(
     // GET /api/repositories/:owner/:repo/insights/:topic
     fastify.get(
       '/api/repositories/:owner/:repo/insights/:topic',
+      {
+        config: {
+          rateLimit: {
+            max: rateLimits.generalMax,
+            timeWindow: rateLimits.timeWindowMs,
+          },
+        },
+      },
       async (request, reply) => {
         const { owner, repo, topic } = request.params as {
           owner: string;
@@ -248,14 +264,22 @@ export function createAiRoutes(
           return reply.status(400).send(errorResponse);
         }
 
-        const query = (request.query as {
-          target?: string;
-          promptVersion?: string;
-          forceRetry?: string;
-        }) || {};
-        const target = query.target || null;
-        const promptVersion = query.promptVersion ? parseInt(query.promptVersion, 10) || 1 : 1;
-        const forceRetry = query.forceRetry === 'true';
+        const parsedQuery = InsightQuerySchema.safeParse(request.query || {});
+        if (!parsedQuery.success) {
+          const firstIssue = parsedQuery.error.issues[0];
+          const errorResponse: ApiError = {
+            error: 'ValidationError',
+            message: firstIssue
+              ? `${firstIssue.path.join('.')}: ${firstIssue.message}`
+              : 'Invalid query parameters.',
+            isRateLimit: false,
+            suggestedAction: 'Ensure target does not exceed 200 chars and promptVersion is valid (1-5).',
+          };
+          return reply.status(400).send(errorResponse);
+        }
+
+        const target = parsedQuery.data.target ?? null;
+        const { promptVersion, forceRetry } = parsedQuery.data;
 
         try {
           const response = await service.getOrEnqueueInsight(
@@ -271,7 +295,7 @@ export function createAiRoutes(
           if (err instanceof RepositoryNotAnalyzedError) {
             const errorResponse: ApiError = {
               error: 'RepositoryNotAnalyzed',
-              message: err.message,
+              message: sanitizeErrorMessage(err.message),
               isRateLimit: false,
               suggestedAction:
                 'Run POST /api/analyze for this repository before requesting AI insights.',
@@ -282,7 +306,11 @@ export function createAiRoutes(
           fastify.log.error(err);
           const errorResponse: ApiError = {
             error: 'AIInsightError',
-            message: 'An internal error occurred while resolving AI insights.',
+            message: sanitizeErrorMessage(
+              err instanceof Error
+                ? err.message
+                : 'An internal error occurred while resolving AI insights.'
+            ),
             isRateLimit: false,
             suggestedAction: 'Please try again shortly or inspect server logs for details.',
           };
@@ -294,6 +322,14 @@ export function createAiRoutes(
     // POST /api/repositories/:owner/:repo/insights/:topic/retry
     fastify.post(
       '/api/repositories/:owner/:repo/insights/:topic/retry',
+      {
+        config: {
+          rateLimit: {
+            max: rateLimits.explainMax,
+            timeWindow: rateLimits.timeWindowMs,
+          },
+        },
+      },
       async (request, reply) => {
         const { owner, repo, topic } = request.params as {
           owner: string;
@@ -313,9 +349,22 @@ export function createAiRoutes(
           return reply.status(400).send(errorResponse);
         }
 
-        const body = (request.body as { target?: string; promptVersion?: number }) || {};
-        const target = body.target || null;
-        const promptVersion = body.promptVersion || 1;
+        const parsedBody = InsightRetryBodySchema.safeParse(request.body || {});
+        if (!parsedBody.success) {
+          const firstIssue = parsedBody.error.issues[0];
+          const errorResponse: ApiError = {
+            error: 'ValidationError',
+            message: firstIssue
+              ? `${firstIssue.path.join('.')}: ${firstIssue.message}`
+              : 'Invalid request payload.',
+            isRateLimit: false,
+            suggestedAction: 'Ensure target does not exceed 200 chars and promptVersion is valid (1-5).',
+          };
+          return reply.status(400).send(errorResponse);
+        }
+
+        const target = parsedBody.data.target ?? null;
+        const { promptVersion } = parsedBody.data;
 
         try {
           const response = await service.getOrEnqueueInsight(
@@ -331,7 +380,7 @@ export function createAiRoutes(
           if (err instanceof RepositoryNotAnalyzedError) {
             const errorResponse: ApiError = {
               error: 'RepositoryNotAnalyzed',
-              message: err.message,
+              message: sanitizeErrorMessage(err.message),
               isRateLimit: false,
               suggestedAction:
                 'Run POST /api/analyze for this repository before requesting AI insights.',
@@ -342,7 +391,11 @@ export function createAiRoutes(
           fastify.log.error(err);
           const errorResponse: ApiError = {
             error: 'AIInsightError',
-            message: 'An internal error occurred while retrying AI insight.',
+            message: sanitizeErrorMessage(
+              err instanceof Error
+                ? err.message
+                : 'An internal error occurred while retrying AI insight.'
+            ),
             isRateLimit: false,
             suggestedAction: 'Please try again shortly.',
           };

@@ -7,6 +7,7 @@ import {
   AITemporaryUnavailableError,
 } from './provider.interface.js';
 import type { AIService } from './ai.service.js';
+import { sanitizeErrorMessage } from './sanitize-error.js';
 
 export function calculateBackoffMs(attemptCount: number): number {
   if (attemptCount <= 1) return 60_000;       // 1 min
@@ -197,7 +198,7 @@ export class ExplanationRunner {
             status: 'failed',
             attemptCount,
             lastErrorCategory: category,
-            lastErrorMessage: err instanceof Error ? err.message : String(err),
+            lastErrorMessage: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
             retryAt,
           })
           .where(

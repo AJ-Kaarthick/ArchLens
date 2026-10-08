@@ -225,26 +225,32 @@ export class AIService {
 
     if (row) {
       if (row.status === 'ready') {
-        if (!forceRetry && row.summary && row.explanation) {
-          return {
-            status: 'ready',
-            topic,
-            target: cleanTarget,
-            result: {
-              topic: row.topic as ExplainTopic,
-              target: row.target,
-              summary: row.summary,
-              explanation: row.explanation,
-              keyTakeaways: row.keyTakeaways || [],
-              evidence: row.evidence || [],
-              generatedAt: row.createdAt.toISOString(),
-              provider: row.provider || 'gemini',
-              model: row.model || 'unknown',
-              cached: true,
-            },
-            isStale: false,
-            promptVersion,
-          };
+        const MIN_COOLDOWN_MS = 60_000; // 1 minute cooldown per key
+        const ageMs = Date.now() - new Date(row.createdAt).getTime();
+        const isCooldownActive = ageMs < MIN_COOLDOWN_MS;
+
+        if (!forceRetry || isCooldownActive) {
+          if (row.summary && row.explanation) {
+            return {
+              status: 'ready',
+              topic,
+              target: cleanTarget,
+              result: {
+                topic: row.topic as ExplainTopic,
+                target: row.target,
+                summary: row.summary,
+                explanation: row.explanation,
+                keyTakeaways: row.keyTakeaways || [],
+                evidence: row.evidence || [],
+                generatedAt: row.createdAt.toISOString(),
+                provider: row.provider || 'gemini',
+                model: row.model || 'unknown',
+                cached: true,
+              },
+              isStale: false,
+              promptVersion,
+            };
+          }
         }
 
         await db
@@ -317,8 +323,8 @@ export class AIService {
       }
 
       if (row.status === 'failed') {
-        const isPastRetryAt = row.retryAt ? new Date() >= new Date(row.retryAt) : false;
-        if (forceRetry || isPastRetryAt) {
+        const isPastRetryAt = !row.retryAt || new Date() >= new Date(row.retryAt);
+        if (isPastRetryAt) {
           await db
             .update(aiExplanations)
             .set({ status: 'pending', retryAt: null })
@@ -345,6 +351,7 @@ export class AIService {
             promptVersion,
           };
         } else {
+          // Explicit retry MUST respect retryAt backoff
           const older = await findOlderSuccessful();
           return {
             status: 'failed',
@@ -433,36 +440,34 @@ export class AIService {
       ? eq(aiExplanations.target, cleanTarget)
       : isNull(aiExplanations.target);
 
-    if (!request.bypassCache) {
-      const [cached] = await db
-        .select()
-        .from(aiExplanations)
-        .where(
-          and(
-            eq(aiExplanations.repositoryId, repositoryId),
-            eq(aiExplanations.commitSha, commitSha),
-            eq(aiExplanations.topic, cleanTopic),
-            targetFilter,
-            eq(aiExplanations.promptVersion, promptVersion),
-            eq(aiExplanations.status, 'ready')
-          )
+    const [cached] = await db
+      .select()
+      .from(aiExplanations)
+      .where(
+        and(
+          eq(aiExplanations.repositoryId, repositoryId),
+          eq(aiExplanations.commitSha, commitSha),
+          eq(aiExplanations.topic, cleanTopic),
+          targetFilter,
+          eq(aiExplanations.promptVersion, promptVersion),
+          eq(aiExplanations.status, 'ready')
         )
-        .limit(1);
+      )
+      .limit(1);
 
-      if (cached && cached.summary && cached.explanation) {
-        return {
-          topic: cached.topic as ExplainTopic,
-          target: cached.target,
-          summary: cached.summary,
-          explanation: cached.explanation,
-          keyTakeaways: cached.keyTakeaways || [],
-          evidence: cached.evidence || [],
-          generatedAt: cached.createdAt.toISOString(),
-          provider: cached.provider || 'gemini',
-          model: cached.model || 'unknown',
-          cached: true,
-        };
-      }
+    if (cached && cached.summary && cached.explanation) {
+      return {
+        topic: cached.topic as ExplainTopic,
+        target: cached.target,
+        summary: cached.summary,
+        explanation: cached.explanation,
+        keyTakeaways: cached.keyTakeaways || [],
+        evidence: cached.evidence || [],
+        generatedAt: cached.createdAt.toISOString(),
+        provider: cached.provider || 'gemini',
+        model: cached.model || 'unknown',
+        cached: true,
+      };
     }
 
     const result = await this.generateExplanation(
@@ -477,20 +482,6 @@ export class AIService {
 
     const now = new Date();
     try {
-      if (request.bypassCache) {
-        await db
-          .delete(aiExplanations)
-          .where(
-            and(
-              eq(aiExplanations.repositoryId, repositoryId),
-              eq(aiExplanations.commitSha, commitSha),
-              eq(aiExplanations.topic, cleanTopic),
-              targetFilter,
-              eq(aiExplanations.promptVersion, promptVersion)
-            )
-          );
-      }
-
       await db
         .insert(aiExplanations)
         .values({

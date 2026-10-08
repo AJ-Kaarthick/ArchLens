@@ -21,12 +21,50 @@ export type EvidenceCitation = z.infer<typeof EvidenceCitationSchema>;
 export const ExplainTopicSchema = z.enum(['overview', 'architecture', 'tech-stack', 'entrypoints']);
 export type ExplainTopic = z.infer<typeof ExplainTopicSchema>;
 
+export const SafeTargetSchema = z
+  .string()
+  .trim()
+  .max(200, 'Target parameter cannot exceed 200 characters')
+  .refine(
+    (val) => {
+      for (let i = 0; i < val.length; i++) {
+        const code = val.charCodeAt(i);
+        if ((code >= 0 && code <= 31) || code === 127) {
+          return false;
+        }
+      }
+      return true;
+    },
+    {
+      message: 'Target contains invalid control characters',
+    }
+  )
+  .optional()
+  .nullable();
+
+export const PromptVersionSchema = z.number().int().min(1).max(5).default(1);
+
 export const ExplainRequestSchema = z.object({
   topic: ExplainTopicSchema.default('overview'),
-  target: z.string().max(200).optional().nullable(),
-  bypassCache: z.boolean().optional(),
+  target: SafeTargetSchema,
 });
 export type ExplainRequest = z.infer<typeof ExplainRequestSchema>;
+
+export const InsightQuerySchema = z.object({
+  target: SafeTargetSchema,
+  promptVersion: z.coerce.number().int().min(1).max(5).default(1),
+  forceRetry: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((val) => val === 'true'),
+});
+export type InsightQuery = z.infer<typeof InsightQuerySchema>;
+
+export const InsightRetryBodySchema = z.object({
+  target: SafeTargetSchema,
+  promptVersion: z.number().int().min(1).max(5).default(1),
+});
+export type InsightRetryBody = z.infer<typeof InsightRetryBodySchema>;
 
 export const ExplainResponseSchema = z.object({
   topic: ExplainTopicSchema,
