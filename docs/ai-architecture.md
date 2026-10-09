@@ -17,11 +17,11 @@ AI must enhance ArchLens's comprehension, not serve as an ungrounded, hallucinat
 
 1. **Grounded in Deterministic Facts:** Every claim, metric, framework detection, and architectural deduction is tied to facts already verified by Phase 2 (manifests, AST patterns, file trees, structural metrics).
 2. **Semantic Retrieval as Context Augmentation:** Semantic vector search locates relevant code and documentation chunks. These slices provide rich, localized context to the LLM but never override or invent structural repository facts.
-3. **Zero Hallucination with Evidence Citations:** Explanations produce structured `evidence` citations referencing real repository files, manifests, entrypoints, dependencies, or metrics.
+3. **Deterministic Evidence Validation:** Explanations produce structured `evidence` citations referencing real repository files, manifests, entrypoints, dependencies, or metrics, audited strictly by `EvidenceValidator`.
 4. **Provider Agnostic Abstractions:** Model generation is encapsulated behind `IAIProvider` (`GeminiAIProvider` and deterministic `MockAIProvider`). Embeddings are encapsulated behind `IEmbeddingProvider` (`GeminiEmbeddingProvider` and deterministic `MockEmbeddingProvider`).
 5. **Security & Prompt-Injection Resistance:** Untrusted user input (repository descriptions, README excerpts, and retrieved code chunks) are bounded, delimiter-sanitized, and isolated inside XML-style `<untrusted_content>` tags. The model is explicitly instructed never to execute instructions from untrusted content.
 6. **Zero Client-Side Secrets:** All AI orchestration and API credentials (`GEMINI_API_KEY`) reside exclusively on the server in `apps/api`. `apps/web` receives only validated JSON contracts.
-7. **Cost-Free Replay Caching:** Generated explanations are cached in PostgreSQL keyed on `(analysis_id, topic, COALESCE(target, ''))`. Re-requesting an explanation for a previously analyzed commit costs zero AI tokens and returns instantly.
+7. **Cost-Free Replay Caching:** Generated explanations are cached in PostgreSQL keyed on `(repository_id, commit_sha, topic, target, prompt_version)`. Re-requesting an explanation for a previously analyzed commit costs zero AI tokens and returns instantly.
 8. **EvidenceValidator Supremacy:** `EvidenceValidator` remains strictly authoritative over all retrieved context and AI claims. The model cannot assert facts from retrieved code snippets unless those claims are verified against deterministic Phase 2 analysis facts.
 9. **Zero Code Execution:** Repository code is never executed during semantic indexing or retrieval; chunks and manifests are processed strictly as static text slices.
 
@@ -44,7 +44,7 @@ AI must enhance ArchLens's comprehension, not serve as an ungrounded, hallucinat
        │
        ▼
 [AIService]
-       ├─► 1. Check PostgreSQL `ai_explanations` Cache (analysis_id, topic, target)
+       ├─► 1. Check PostgreSQL `ai_explanations` Cache (repository_id, commit_sha, topic, target, prompt_version)
        │      └─► Hit: Return cached explanation (cached: true, 0ms token latency)
        │
        ▼ Miss:
@@ -67,7 +67,7 @@ AI must enhance ArchLens's comprehension, not serve as an ungrounded, hallucinat
        ├─► Validates files/manifests/entrypoints against indexed git tree & landmarks
        ├─► Validates dependencies against detected tech stack
        ├─► Validates patterns & metrics against Phase 2 results
-       └─► Discards hallucinations; synthesizes verified fallbacks if needed
+       └─► Discards ungrounded or invalid citations strictly
        │
        ▼
 [PostgreSQL Cache] ── Stores in `ai_explanations` table

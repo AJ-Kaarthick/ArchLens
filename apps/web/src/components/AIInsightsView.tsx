@@ -92,6 +92,18 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
   // In-flight tracking: active AbortController, request counters, and polling timers
   const abortControllersRef = useRef<Map<ExplainTopic, AbortController>>(new Map());
   const pollTimersRef = useRef<Map<ExplainTopic, ReturnType<typeof setTimeout>>>(new Map());
+  const pollAttemptsRef = useRef<Record<ExplainTopic, number>>({
+    overview: 0,
+    architecture: 0,
+    'tech-stack': 0,
+    entrypoints: 0,
+  });
+  const pollStartTimeRef = useRef<Record<ExplainTopic, number>>({
+    overview: 0,
+    architecture: 0,
+    'tech-stack': 0,
+    entrypoints: 0,
+  });
   const requestIdsRef = useRef<Record<ExplainTopic, number>>({
     overview: 0,
     architecture: 0,
@@ -100,7 +112,12 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
   });
 
   const fetchInsight = useCallback(
-    async (topicToFetch: ExplainTopic, targetToFetch?: string, forceRetry = false) => {
+    async (
+      topicToFetch: ExplainTopic,
+      targetToFetch?: string,
+      forceRetry = false,
+      isPoll = false
+    ) => {
       const owner = analysis.repository.owner;
       const repo = analysis.repository.name;
       const cleanTarget = targetToFetch ? targetToFetch.trim() : '';
@@ -110,6 +127,31 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
       if (existingTimer) {
         clearTimeout(existingTimer);
         pollTimersRef.current.delete(topicToFetch);
+      }
+
+      // Check overall timeout cap (3 minutes) for active polling sessions
+      if (isPoll) {
+        const startTime = pollStartTimeRef.current[topicToFetch] || Date.now();
+        if (Date.now() - startTime > 180_000) {
+          setTopicStates((prev) => ({
+            ...prev,
+            [topicToFetch]: {
+              ...prev[topicToFetch],
+              status: 'failed',
+              error: {
+                error: 'TimeoutError',
+                message: 'Insight generation timed out after 3 minutes.',
+                isRateLimit: false,
+                suggestedAction: 'Please click Retry to try generating insights again.',
+              },
+            },
+          }));
+          return;
+        }
+      } else {
+        // Reset tracking on fresh manual request or retry
+        pollAttemptsRef.current[topicToFetch] = 0;
+        pollStartTimeRef.current[topicToFetch] = Date.now();
       }
 
       // Abort any existing in-flight request for this topic
@@ -186,12 +228,17 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
           },
         }));
 
-        // Poll every 2.5 seconds while status remains pending
+        // Poll with progressive backoff (2.5s -> 5s -> 10s) while status remains pending
         if (insight.status === 'pending') {
+          const attempt = ++pollAttemptsRef.current[topicToFetch];
+          const delay = attempt >= 4 ? 10000 : attempt >= 2 ? 5000 : 2500;
           const timer = setTimeout(() => {
-            fetchInsight(topicToFetch, targetToFetch, false);
-          }, 2500);
+            fetchInsight(topicToFetch, targetToFetch, false, true);
+          }, delay);
           pollTimersRef.current.set(topicToFetch, timer);
+        } else {
+          pollAttemptsRef.current[topicToFetch] = 0;
+          pollStartTimeRef.current[topicToFetch] = 0;
         }
       } catch (err: unknown) {
         if (requestIdsRef.current[topicToFetch] !== requestId) {
@@ -228,6 +275,8 @@ export const AIInsightsView: React.FC<AIInsightsViewProps> = ({ analysis, onSele
     // Clear all pending timers and abort controllers
     pollTimersRef.current.forEach((t) => clearTimeout(t));
     pollTimersRef.current.clear();
+    pollAttemptsRef.current = { overview: 0, architecture: 0, 'tech-stack': 0, entrypoints: 0 };
+    pollStartTimeRef.current = { overview: 0, architecture: 0, 'tech-stack': 0, entrypoints: 0 };
     abortControllersRef.current.forEach((ctrl) => ctrl.abort());
     abortControllersRef.current.clear();
 

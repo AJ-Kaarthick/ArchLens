@@ -613,7 +613,7 @@ export function App() {
                 </p>
                 <div className="pt-1 flex items-center gap-1.5 text-[11px] text-amber-400 font-medium">
                   <ShieldCheck size={13} />
-                  <span>Zero-Hallucination Citations</span>
+                  <span>Strict Evidence Validation</span>
                 </div>
               </Card>
 
@@ -643,9 +643,9 @@ export function App() {
                 </div>
                 <p className="text-slate-400 max-w-2xl leading-relaxed">
                   ArchLens ingestion and analysis never execute or clone repository code, operating
-                  purely via bounded GitHub REST APIs (10k items, 256 KB landmark previews). Sandboxed
-                  execution and live preview are optional, isolated user-triggered subsystems disabled by
-                  default in production deployments. PostgreSQL persists analysis snapshots with sub-millisecond AI explanation caching.
+                  purely via bounded GitHub REST APIs (10k items, 256 KB landmark previews). Host
+                  execution and live preview are optional, restricted host-process subsystems disabled by
+                  default in production deployments. PostgreSQL persists analysis snapshots with instant, token-free cached explanation retrieval.
                 </p>
               </div>
 

@@ -10,7 +10,7 @@ ArchLens is an open-source platform that enables developers, contributors, and t
 
 **Current Status:** ArchLens v1.0.0 — Production Ready.
 
-ArchLens features a fully functional, deterministic repository analysis engine, paired with a grounded AI reasoning layer, intelligent code chunking with dual-mode vector search (PostgreSQL `pgvector` with relational cosine fallback), a refined, accessible React developer explorer, a secure, client-agnostic sandboxed execution and live preview subsystem, production-ready Drizzle migrations, in-memory rate limiting, and unprivileged Docker containerization.
+ArchLens features a fully functional, deterministic repository analysis engine, paired with an optional, grounded AI reasoning layer, intelligent code chunking with dual-mode vector search (PostgreSQL `pgvector` with relational cosine fallback), a refined, accessible React developer explorer, an optional host execution and live preview subsystem (disabled by default in production), production-ready Drizzle migrations, in-memory rate limiting, and unprivileged Docker containerization.
 
 ---
 
@@ -22,7 +22,7 @@ Gaining a quick, accurate mental model of a new or unfamiliar repository is trad
 - **Environment friction:** Requiring specific language toolchains, SDK versions, or container daemons just to evaluate a project.
 - **AI hallucination risks:** Off-the-shelf LLMs routinely guess project dependencies, hallucinate outdated patterns, and misstate repository structures when ungrounded.
 
-ArchLens solves this by establishing a **factual, deterministic baseline** first. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any AI reasoning occurs. AI reasoning is strictly constrained to explaining verified facts with verifiable evidence citations. Semantic retrieval augments reasoning by locating relevant code slices without altering structural facts. For eligible repositories, sandboxed execution safely evaluates entrypoints without host compromise.
+ArchLens solves this by establishing a **factual, deterministic baseline** as its primary product. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any AI reasoning occurs. AI reasoning is an optional enhancement strictly constrained to explaining verified facts with verifiable evidence citations audited by `EvidenceValidator`. Semantic retrieval augments reasoning by locating relevant code slices without altering structural facts. Host-process execution is restricted and disabled by default in production deployments.
 
 ---
 
