@@ -54,6 +54,13 @@ jobs:
       - name: Run typecheck
         run: pnpm -r run typecheck
 
+      - name: Verify fresh DB migration & idempotent re-runs
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/archlens
+        run: |
+          pnpm --filter @archlens/api db:migrate
+          pnpm --filter @archlens/api db:migrate
+
       - name: Run tests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/archlens
@@ -64,6 +71,10 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/archlens
         run: pnpm --filter @archlens/api db:check
 
+      - name: Dependency security audit
+        run: pnpm audit --prod || true
+        continue-on-error: true
+
       - name: Run production build
         run: pnpm -r run build
 
@@ -71,7 +82,7 @@ jobs:
         run: git diff --check
 
   docker:
-    name: Validate Docker Builds
+    name: Validate Docker Builds & Compose
     runs-on: ubuntu-latest
     needs: validate
 
@@ -100,3 +111,12 @@ jobs:
 
       - name: Validate Docker Compose configuration
         run: docker compose config
+
+      - name: Compose smoke test
+        run: |
+          docker compose up -d
+          timeout 60 bash -c 'until [ "$(docker inspect -f {{.State.Health.Status}} archlens-api-sim 2>/dev/null)" = "healthy" ]; do sleep 2; done'
+          curl -fsS http://127.0.0.1:3000/health/liveness
+          curl -fsS http://127.0.0.1:3000/health/readiness
+          curl -fsS http://127.0.0.1:8080/health/liveness
+          docker compose down -v
