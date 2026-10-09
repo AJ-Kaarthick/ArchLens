@@ -1,4 +1,9 @@
-import type { ArchitectureOverview, LandmarkInfo } from '@archlens/shared';
+import type {
+  ArchitectureOverview,
+  LandmarkInfo,
+  ReadingGuidanceItem,
+  ReadingGuidanceRole,
+} from '@archlens/shared';
 import type { RawGitTreeItem } from '../github.service.js';
 import { detectLandmark } from './categorizer.js';
 
@@ -271,6 +276,15 @@ export function detectArchitecture(
     }
   }
 
+  // 5. Deterministic "Start Here" Reading Guidance
+  const readingGuidance = generateReadingGuidance(
+    paths,
+    primaryEntrypoints,
+    keyLandmarks,
+    isMonorepo,
+    workspaces
+  );
+
   return {
     isMonorepo,
     monorepoTool,
@@ -278,5 +292,193 @@ export function detectArchitecture(
     detectedPatterns: patterns,
     primaryEntrypoints,
     keyLandmarks,
+    readingGuidance,
   };
+}
+
+/**
+ * Deterministically constructs a recommended "Start Here" reading sequence for onboarding into a repository.
+ * Operates purely on structural landmarks (README, primary entrypoints, root manifests, configuration, shared packages).
+ */
+export function generateReadingGuidance(
+  paths: string[],
+  primaryEntrypoints: string[],
+  keyLandmarks: LandmarkInfo[],
+  isMonorepo: boolean,
+  _workspaces: string[]
+): ReadingGuidanceItem[] {
+  const guidance: ReadingGuidanceItem[] = [];
+  const seenPaths = new Set<string>();
+
+  const addStep = (
+    filePath: string,
+    role: ReadingGuidanceRole,
+    rationale: string
+  ) => {
+    if (seenPaths.has(filePath) || !paths.includes(filePath)) return;
+    seenPaths.add(filePath);
+    const lastSlash = filePath.lastIndexOf('/');
+    const name = lastSlash >= 0 ? filePath.substring(lastSlash + 1) : filePath;
+    guidance.push({
+      step: guidance.length + 1,
+      path: filePath,
+      name,
+      role,
+      rationale,
+    });
+  };
+
+  // Step 1: High-Level Overview Landmark (README)
+  const readmeCandidate = paths.find((p) =>
+    /^(readme(\.(md|markdown|rst|txt))?)$/i.test(p)
+  );
+  if (readmeCandidate) {
+    addStep(
+      readmeCandidate,
+      'overview',
+      'Start here for repository intent, high-level features, and architectural context.'
+    );
+  }
+
+  // Step 2: Root Manifest / Project & Workspace Layout
+  const rootManifestCandidates = [
+    'pnpm-workspace.yaml',
+    'package.json',
+    'Cargo.toml',
+    'go.mod',
+    'pyproject.toml',
+    'requirements.txt',
+    'pom.xml',
+    'build.gradle',
+  ];
+  for (const candidate of rootManifestCandidates) {
+    if (paths.includes(candidate)) {
+      const isWorkspace =
+        candidate === 'pnpm-workspace.yaml' ||
+        (candidate === 'Cargo.toml' && isMonorepo);
+      addStep(
+        candidate,
+        'root-manifest',
+        isWorkspace
+          ? 'Defines repository workspace topology, dependency boundaries, and package links.'
+          : 'Root package manifest declaring dependencies, build scripts, and engine constraints.'
+      );
+      break;
+    }
+  }
+
+  // Step 3 & 4: Primary Runtime Entrypoints
+  // Sort entrypoints: server/api entrypoint first, then client/web/app entrypoint, then library entrypoint
+  const sortedEntrypoints = [...primaryEntrypoints].sort((a, b) => {
+    const isServerA = /(server|main\.go|app\.py|main\.rs)/i.test(a);
+    const isServerB = /(server|main\.go|app\.py|main\.rs)/i.test(b);
+    if (isServerA && !isServerB) return -1;
+    if (!isServerA && isServerB) return 1;
+    const isClientA = /(main\.tsx|app\.tsx|index\.html)/i.test(a);
+    const isClientB = /(main\.tsx|app\.tsx|index\.html)/i.test(b);
+    if (isClientA && !isClientB) return -1;
+    if (!isClientA && isClientB) return 1;
+    return a.localeCompare(b);
+  });
+
+  let entrypointCount = 0;
+  for (const entry of sortedEntrypoints) {
+    if (entrypointCount >= 2) break;
+    if (seenPaths.has(entry)) continue;
+
+    let rationale = 'Execution kickoff point bootstrapping runtime services and routes.';
+    if (/(web|client|main\.tsx|app\.tsx|index\.html)/i.test(entry)) {
+      rationale = 'Frontend client bootstrapper mounting DOM components and view state.';
+    } else if (/(server|api)/i.test(entry)) {
+      rationale = 'Backend service bootstrapper initializing HTTP routes and dependencies.';
+    } else if (/(lib\.rs|index\.ts|index\.js)/i.test(entry)) {
+      rationale = 'Core module entrypoint exposing public interfaces and exports.';
+    }
+
+    addStep(entry, 'entrypoint', rationale);
+    entrypointCount++;
+  }
+
+  // Step 5: Core Configuration or Infrastructure Definition
+  const configCandidates = [
+    'docker-compose.yml',
+    'docker-compose.yaml',
+    'Dockerfile',
+    'apps/api/Dockerfile',
+    'apps/web/Dockerfile',
+    'tsconfig.json',
+    'vite.config.ts',
+  ];
+  for (const config of configCandidates) {
+    if (paths.includes(config) && !seenPaths.has(config)) {
+      const isDocker = config.includes('docker') || config.includes('Dockerfile');
+      addStep(
+        config,
+        'configuration',
+        isDocker
+          ? 'Defines containerized environment constraints and service orchestration.'
+          : 'Central toolchain configuration establishing compiler rules and resolution boundaries.'
+      );
+      break;
+    }
+  }
+
+  // Step 6: Shared Core Contracts or Key Workspace Package
+  if (isMonorepo) {
+    const sharedPackageCandidates = [
+      'packages/shared/src/index.ts',
+      'packages/shared/package.json',
+      'packages/core/src/index.ts',
+      'packages/core/package.json',
+      'packages/common/src/index.ts',
+      'packages/common/package.json',
+    ];
+    let addedShared = false;
+    for (const sharedCand of sharedPackageCandidates) {
+      if (paths.includes(sharedCand) && !seenPaths.has(sharedCand)) {
+        addStep(
+          sharedCand,
+          'key-package',
+          'Domain contracts and shared models consumed across the monorepo.'
+        );
+        addedShared = true;
+        break;
+      }
+    }
+
+    if (!addedShared) {
+      const keyPkgLandmark = keyLandmarks.find(
+        (lm) =>
+          !seenPaths.has(lm.path) &&
+          (lm.path.startsWith('packages/') ||
+            lm.path.startsWith('crates/') ||
+            lm.path.startsWith('services/'))
+      );
+      if (keyPkgLandmark) {
+        addStep(
+          keyPkgLandmark.path,
+          'key-package',
+          keyPkgLandmark.description ||
+            'Core library package providing foundational domain functionality.'
+        );
+      }
+    }
+  } else {
+    const dataLandmark = keyLandmarks.find(
+      (lm) =>
+        !seenPaths.has(lm.path) &&
+        (lm.path.includes('schema') ||
+          lm.path.includes('db/') ||
+          lm.path.includes('models/'))
+    );
+    if (dataLandmark) {
+      addStep(
+        dataLandmark.path,
+        'configuration',
+        'Persistence schema and database models establishing the domain entity structures.'
+      );
+    }
+  }
+
+  return guidance;
 }

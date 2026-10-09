@@ -200,6 +200,112 @@ describe('Deterministic Analyzer', () => {
       expect(arch.primaryEntrypoints).toContain('packages/react/index.js');
       expect(arch.primaryEntrypoints).toContain('packages/react-dom/index.js');
     });
+
+    it('constructs deterministic reading guidance for fullstack monorepo', () => {
+      const tree: RawGitTreeItem[] = [
+        { path: 'README.md', mode: '100644', type: 'blob', sha: '1', size: 100 },
+        { path: 'pnpm-workspace.yaml', mode: '100644', type: 'blob', sha: '2', size: 50 },
+        { path: 'apps/web/src/App.tsx', mode: '100644', type: 'blob', sha: '3', size: 100 },
+        { path: 'apps/api/src/server.ts', mode: '100644', type: 'blob', sha: '4', size: 100 },
+        { path: 'packages/shared/src/index.ts', mode: '100644', type: 'blob', sha: '5', size: 100 },
+        { path: 'Dockerfile', mode: '100644', type: 'blob', sha: '6', size: 50 },
+      ];
+
+      const arch = detectArchitecture(tree, {
+        'pnpm-workspace.yaml': 'packages:\n  - "apps/*"\n  - "packages/*"',
+      });
+
+      expect(arch.readingGuidance).toBeDefined();
+      const guidance = arch.readingGuidance!;
+      expect(guidance.length).toBeGreaterThanOrEqual(4);
+
+      // Verify sequence and roles
+      expect(guidance[0]).toEqual({
+        step: 1,
+        path: 'README.md',
+        name: 'README.md',
+        role: 'overview',
+        rationale: expect.stringContaining('Start here'),
+      });
+
+      expect(guidance[1]).toEqual({
+        step: 2,
+        path: 'pnpm-workspace.yaml',
+        name: 'pnpm-workspace.yaml',
+        role: 'root-manifest',
+        rationale: expect.stringContaining('workspace topology'),
+      });
+
+      const paths = guidance.map((g) => g.path);
+      expect(paths).toContain('apps/api/src/server.ts');
+      expect(paths).toContain('apps/web/src/App.tsx');
+      expect(paths).toContain('packages/shared/src/index.ts');
+      expect(paths).toContain('Dockerfile');
+
+      // Verify no duplicates
+      const uniquePaths = new Set(paths);
+      expect(uniquePaths.size).toBe(paths.length);
+    });
+
+    it('constructs reading guidance for a single-package Go service', () => {
+      const tree: RawGitTreeItem[] = [
+        { path: 'README.md', mode: '100644', type: 'blob', sha: '1', size: 100 },
+        { path: 'go.mod', mode: '100644', type: 'blob', sha: '2', size: 50 },
+        { path: 'cmd/main.go', mode: '100644', type: 'blob', sha: '3', size: 100 },
+        { path: 'docker-compose.yml', mode: '100644', type: 'blob', sha: '4', size: 100 },
+      ];
+
+      const arch = detectArchitecture(tree, {
+        'go.mod': 'module github.com/example/service\n\ngo 1.21',
+      });
+
+      expect(arch.readingGuidance).toBeDefined();
+      const guidance = arch.readingGuidance!;
+      expect(guidance).toHaveLength(4);
+      expect(guidance.map((g) => g.path)).toEqual([
+        'README.md',
+        'go.mod',
+        'cmd/main.go',
+        'docker-compose.yml',
+      ]);
+      expect(guidance[0].role).toBe('overview');
+      expect(guidance[1].role).toBe('root-manifest');
+      expect(guidance[2].role).toBe('entrypoint');
+      expect(guidance[3].role).toBe('configuration');
+    });
+
+    it('constructs reading guidance for a Rust library crate without docker', () => {
+      const tree: RawGitTreeItem[] = [
+        { path: 'README.md', mode: '100644', type: 'blob', sha: '1', size: 100 },
+        { path: 'Cargo.toml', mode: '100644', type: 'blob', sha: '2', size: 50 },
+        { path: 'src/lib.rs', mode: '100644', type: 'blob', sha: '3', size: 100 },
+      ];
+
+      const arch = detectArchitecture(tree, {
+        'Cargo.toml': '[package]\nname = "mycrate"\nversion = "0.1.0"',
+      });
+
+      expect(arch.readingGuidance).toBeDefined();
+      const guidance = arch.readingGuidance!;
+      expect(guidance).toHaveLength(3);
+      expect(guidance.map((g) => g.path)).toEqual([
+        'README.md',
+        'Cargo.toml',
+        'src/lib.rs',
+      ]);
+      expect(guidance[0].role).toBe('overview');
+      expect(guidance[1].role).toBe('root-manifest');
+      expect(guidance[2].role).toBe('entrypoint');
+    });
+
+    it('handles minimal repositories gracefully with zero crashes', () => {
+      const tree: RawGitTreeItem[] = [
+        { path: 'script.py', mode: '100644', type: 'blob', sha: '1', size: 100 },
+      ];
+
+      const arch = detectArchitecture(tree, {});
+      expect(Array.isArray(arch.readingGuidance)).toBe(true);
+    });
   });
 
   describe('calculateMetrics', () => {

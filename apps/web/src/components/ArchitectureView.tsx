@@ -7,6 +7,7 @@ import {
   FileCode2,
   ArrowRight,
   CheckCircle2,
+  BookOpen,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/Card.tsx';
 import { Badge } from './ui/Badge.tsx';
@@ -22,6 +23,88 @@ export const ArchitectureView: React.FC<ArchitectureViewProps> = ({
 }) => {
   return (
     <div className="space-y-6">
+      {/* Deterministic "Start Here" Reading Guidance */}
+      {architecture.readingGuidance && architecture.readingGuidance.length > 0 && (
+        <Card variant="default" className="border-blue-500/20 bg-gradient-to-b from-blue-950/20 to-slate-900/60">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>
+                <BookOpen size={16} className="text-blue-400" />
+                <span>Start Here: Recommended Reading Order</span>
+              </CardTitle>
+              <Badge variant="primary" size="xs">
+                Deterministic Landmark Order
+              </Badge>
+            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              Curated architectural roadmap for navigating this codebase efficiently, derived from verified entrypoints, manifests, and documentation landmarks.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2.5">
+              {architecture.readingGuidance.map((item) => (
+                <button
+                  key={item.step}
+                  type="button"
+                  onClick={() =>
+                    onSelectLandmark &&
+                    onSelectLandmark({
+                      path: item.path,
+                      name: item.name,
+                      type:
+                        item.role === 'overview'
+                          ? 'doc'
+                          : item.role === 'root-manifest'
+                          ? 'manifest'
+                          : item.role === 'entrypoint'
+                          ? 'entry'
+                          : 'config',
+                      description: item.rationale,
+                    })
+                  }
+                  className="w-full text-left p-3 rounded-lg bg-slate-950/60 hover:bg-slate-800/80 border border-slate-800 hover:border-slate-700 transition flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                >
+                  <div className="flex items-start sm:items-center gap-3 min-w-0">
+                    <span className="w-6 h-6 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center text-xs font-semibold shrink-0">
+                      {item.step}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-xs font-semibold text-slate-200 group-hover:text-blue-300 transition truncate">
+                          {item.path}
+                        </span>
+                        <Badge
+                          variant={
+                            item.role === 'overview'
+                              ? 'warning'
+                              : item.role === 'entrypoint'
+                              ? 'primary'
+                              : item.role === 'root-manifest'
+                              ? 'purple'
+                              : item.role === 'key-package'
+                              ? 'cyan'
+                              : 'neutral'
+                          }
+                          size="xs"
+                        >
+                          {item.role}
+                        </Badge>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1 group-hover:text-slate-300">
+                        {item.rationale}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 text-xs text-slate-500 group-hover:text-blue-400 transition shrink-0 pl-9 sm:pl-0">
+                    <span>Inspect</span>
+                    <ArrowRight size={13} className="group-hover:translate-x-0.5 transition" />
+                  </div>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
       {/* Pattern & Monorepo Overview */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {/* Monorepo Info */}

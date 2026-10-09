@@ -135,6 +135,26 @@ export const LandmarkInfoSchema = z.object({
 
 export type LandmarkInfo = z.infer<typeof LandmarkInfoSchema>;
 
+export const ReadingGuidanceRoleSchema = z.enum([
+  'overview',
+  'root-manifest',
+  'entrypoint',
+  'configuration',
+  'key-package',
+]);
+
+export type ReadingGuidanceRole = z.infer<typeof ReadingGuidanceRoleSchema>;
+
+export const ReadingGuidanceItemSchema = z.object({
+  step: z.number(),
+  path: z.string(),
+  name: z.string(),
+  role: ReadingGuidanceRoleSchema,
+  rationale: z.string(),
+});
+
+export type ReadingGuidanceItem = z.infer<typeof ReadingGuidanceItemSchema>;
+
 export const ArchitectureOverviewSchema = z.object({
   isMonorepo: z.boolean(),
   monorepoTool: z.string().nullable(),
@@ -142,6 +162,7 @@ export const ArchitectureOverviewSchema = z.object({
   detectedPatterns: z.array(z.string()),
   primaryEntrypoints: z.array(z.string()),
   keyLandmarks: z.array(LandmarkInfoSchema),
+  readingGuidance: z.array(ReadingGuidanceItemSchema).optional(),
 });
 
 export type ArchitectureOverview = z.infer<typeof ArchitectureOverviewSchema>;

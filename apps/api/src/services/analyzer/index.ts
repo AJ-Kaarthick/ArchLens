@@ -7,7 +7,7 @@ import { calculateMetrics } from './metrics.js';
 
 export { categorizePath, detectLandmark, buildFileTreeItems } from './categorizer.js';
 export { detectTechStack } from './tech-stack.js';
-export { detectArchitecture } from './architecture.js';
+export { detectArchitecture, generateReadingGuidance } from './architecture.js';
 export { calculateMetrics } from './metrics.js';
 
 export function analyzeRepositoryData(params: {
