@@ -40,6 +40,12 @@ for (const entry of journal.entries) {
 
 // 3. Run drizzle-kit generate:pg to ensure zero uncommitted schema drift
 const apiDir = path.dirname(drizzleDir);
+const repoRoot = path.resolve(apiDir, '../..');
+const gitStatusBefore = execSync('git status --porcelain apps/api/drizzle', {
+  cwd: repoRoot,
+  encoding: 'utf8',
+}).trim();
+
 try {
   const out = execSync('npx drizzle-kit generate:pg', {
     cwd: apiDir,
@@ -52,21 +58,15 @@ try {
   process.exit(1);
 }
 
-// 4. Verify git status in drizzle directory shows no unexpected changes
-const repoRoot = path.resolve(apiDir, '../..');
-const gitStatus = execSync('git status --porcelain apps/api/drizzle', {
+// 4. Verify drizzle-kit did not generate new migrations or modify existing files
+const gitStatusAfter = execSync('git status --porcelain apps/api/drizzle', {
   cwd: repoRoot,
   encoding: 'utf8',
 }).trim();
 
-// Ignore the newly tracked 0001_snapshot.json if staged or untracked during local testing
-const unexpectedChanges = gitStatus
-  .split('\n')
-  .filter((line) => line && !line.includes('0001_snapshot.json'));
-
-if (unexpectedChanges.length > 0) {
+if (gitStatusBefore !== gitStatusAfter) {
   console.error(
-    `[db:check] DRIFT DETECTED! Schema has unmigrated changes or unexpected drizzle diff:\n${unexpectedChanges.join('\n')}`
+    `[db:check] DRIFT DETECTED! drizzle-kit generated uncommitted schema changes:\n${gitStatusAfter}`
   );
   process.exit(1);
 }
