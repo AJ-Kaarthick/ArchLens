@@ -39,10 +39,13 @@ export function getMigrationsFolder(): string {
  * Runs pending Drizzle database migrations against PostgreSQL.
  * Safe for both fresh databases and existing populated databases.
  */
-export async function runMigrations(customConnectionString?: string): Promise<void> {
+export async function runMigrations(
+  customConnectionString?: string,
+  customMigrationsFolder?: string
+): Promise<void> {
   const config = getDbConfig();
   const connectionString = customConnectionString || config.connectionString;
-  const migrationsFolder = getMigrationsFolder();
+  const migrationsFolder = customMigrationsFolder || getMigrationsFolder();
 
   console.log(`[db:migrate] Connecting to database: ${connectionString.replace(/:[^:@]+@/, ':****@')}`);
   console.log(`[db:migrate] Using migrations folder: ${migrationsFolder}`);
