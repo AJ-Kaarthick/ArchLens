@@ -202,4 +202,70 @@ describe('CodeChunker', () => {
     const uniqueFiles = new Set(repoChunks.map((c) => c.filePath));
     expect(uniqueFiles.size).toBe(2);
   });
+
+  it('chunks Markdown files on header boundaries (#, ##, ###)', () => {
+    const mdContent = [
+      '# Project Title',
+      'Brief introduction about the project.',
+      '',
+      '## Installation',
+      '```bash',
+      'npm install my-project',
+      '```',
+      '',
+      '## Usage',
+      '```javascript',
+      'const myProj = require("my-project");',
+      'myProj.run();',
+      '```',
+    ].join('\n');
+
+    const file: ChunkInputFile = {
+      path: 'README.md',
+      content: mdContent,
+      size: mdContent.length,
+      category: 'doc',
+    };
+
+    const chunks = chunker.chunkFile(file);
+    expect(chunks).toHaveLength(3);
+
+    expect(chunks[0].content).toContain('# Project Title');
+    expect(chunks[0].startLine).toBe(1);
+
+    expect(chunks[1].content).toContain('## Installation');
+    expect(chunks[1].content).toContain('npm install');
+
+    expect(chunks[2].content).toContain('## Usage');
+    expect(chunks[2].content).toContain('myProj.run()');
+  });
+
+  it('prioritizes core source files over generic documentation files', () => {
+    const files: ChunkInputFile[] = [
+      {
+        path: 'LICENSE',
+        content: 'MIT License\nCopyright (c) 2026',
+        size: 30,
+        category: 'doc',
+      },
+      {
+        path: 'lib/index.js',
+        content: 'module.exports = function() {};',
+        size: 32,
+        category: 'source',
+      },
+      {
+        path: 'README.md',
+        content: '# Readme\nInfo',
+        size: 15,
+        category: 'doc',
+      },
+    ];
+
+    const repoChunks = chunker.chunkRepository(files);
+    // README is priority 0, lib/index.js (source) is priority 1, LICENSE (doc) is priority 2
+    expect(repoChunks[0].filePath).toBe('README.md');
+    expect(repoChunks[1].filePath).toBe('lib/index.js');
+    expect(repoChunks[2].filePath).toBe('LICENSE');
+  });
 });

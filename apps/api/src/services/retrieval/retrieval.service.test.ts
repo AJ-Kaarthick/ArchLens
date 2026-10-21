@@ -152,7 +152,7 @@ describe('RetrievalService', () => {
 
     // Idempotent indexing: calling indexFiles again should skip duplicate insertion
     const reindexA = await service.indexFiles(analysisA.id, filesA);
-    expect(reindexA.indexedChunks).toBe(1); // returned existing count
+    expect(reindexA.indexedChunks).toBe(3); // returned existing count
 
     // Search Repo A for "jwt authentication"
     const authSearch = await service.search(
@@ -166,6 +166,8 @@ describe('RetrievalService', () => {
     expect(authSearch.results[0].filePath).toBe('src/auth.ts');
     expect(authSearch.results[0].content).toContain('verifyJwtToken');
     expect(authSearch.durationMs).toBeGreaterThanOrEqual(0);
+    expect(authSearch.fallback).toBe(false);
+    expect(authSearch.engine).toBe('pgvector_hnsw');
 
     // Verify Repository Isolation: search on Repo A NEVER returns Repo B chunks
     for (const item of authSearch.results) {
@@ -417,6 +419,8 @@ describe('RetrievalService', () => {
     // 2. Verified: results are returned with fallback: true
     expect(searchRes.results.length).toBeGreaterThanOrEqual(1);
     expect(searchRes.fallback).toBe(true);
+    expect(searchRes.engine).toBe('unindexed_tree');
+    expect(searchRes.fallbackReason).toBe('not_indexed');
     expect(searchRes.results[0].filePath).toBe('src/server.ts');
     expect(searchRes.results[0].content).toContain('Fastify HTTP application server');
 
@@ -500,6 +504,7 @@ describe('RetrievalService', () => {
     expect(lexRes.results).toHaveLength(1);
     expect(lexRes.results[0].filePath).toBe('src/payment.ts');
     expect(lexRes.fallback).toBe(false);
+    expect(lexRes.engine).toBe('chunk_lexical');
     expect(lexRes.mode).toBe('lexical');
 
     // Semantic mode
@@ -599,6 +604,8 @@ describe('RetrievalService', () => {
     );
 
     expect(result.fallback).toBe(true);
+    expect(result.engine).toBe('chunk_lexical');
+    expect(result.fallbackReason).toBe('embedding_unavailable');
     expect(result.results).toHaveLength(1);
     expect(result.results[0].filePath).toBe('src/resilience.ts');
 
@@ -702,6 +709,144 @@ describe('RetrievalService', () => {
         // Relational in-memory cosine fallback is active and zero crashes occur
         expect(isVectorSupported).toBe(false);
       }
+    });
+
+    it('throws actionable error and does not report success when embedding provider returns fewer vectors than chunks', async () => {
+      const testOwner = `mismatch-${Date.now()}`;
+      const testRepo = 'mismatch-repo';
+
+      const [repo] = await db
+        .insert(repositories)
+        .values({
+          owner: testOwner,
+          name: testRepo,
+          url: `https://github.com/${testOwner}/${testRepo}`,
+          defaultBranch: 'main',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      const [analysis] = await db
+        .insert(analyses)
+        .values({
+          repositoryId: repo.id,
+          techStack: [],
+          architecture: {
+            isMonorepo: false,
+            monorepoTool: null,
+            workspaces: [],
+            detectedPatterns: [],
+            primaryEntrypoints: [],
+            keyLandmarks: [],
+          },
+          metrics: {
+            totalFiles: 2,
+            totalBytes: 100,
+            languages: {},
+            categories: {},
+            largestFiles: [],
+          },
+          tree: [],
+          analyzedAt: new Date(),
+        })
+        .returning();
+
+      const files: ChunkInputFile[] = [
+        { path: 'a.ts', content: 'const a = 1;', size: 12, category: 'source' },
+        { path: 'b.ts', content: 'const b = 2;', size: 12, category: 'source' },
+      ];
+
+      // Defective provider returns only 1 vector for 2 chunks (simulates batch bug)
+      const buggyProvider = {
+        name: 'buggy-provider',
+        dimension: 768,
+        embed: async () => [new Array(768).fill(0.1)],
+        embedQuery: async () => new Array(768).fill(0.1),
+      };
+
+      const strictService = new RetrievalService(buggyProvider, chunker);
+
+      await expect(strictService.indexFiles(analysis.id, files)).rejects.toThrow(
+        /Indexing invariant violated/
+      );
+
+      await db.delete(repositories).where(eq(repositories.id, repo.id));
+    });
+
+    it('requires complete embeddings and vectors across all chunks before reporting ready', async () => {
+      const testOwner = `incomplete-${Date.now()}`;
+      const testRepo = 'incomplete-repo';
+
+      const [repo] = await db
+        .insert(repositories)
+        .values({
+          owner: testOwner,
+          name: testRepo,
+          url: `https://github.com/${testOwner}/${testRepo}`,
+          defaultBranch: 'main',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      const [analysis] = await db
+        .insert(analyses)
+        .values({
+          repositoryId: repo.id,
+          techStack: [],
+          architecture: {
+            isMonorepo: false,
+            monorepoTool: null,
+            workspaces: [],
+            detectedPatterns: [],
+            primaryEntrypoints: [],
+            keyLandmarks: [],
+          },
+          metrics: {
+            totalFiles: 2,
+            totalBytes: 100,
+            languages: {},
+            categories: {},
+            largestFiles: [],
+          },
+          tree: [],
+          analyzedAt: new Date(),
+        })
+        .returning();
+
+      // Insert 2 chunks manually: one with embedding, one with NULL embedding
+      await db.insert(codeChunks).values([
+        {
+          analysisId: analysis.id,
+          filePath: 'chunk1.ts',
+          chunkIndex: 0,
+          startLine: 1,
+          endLine: 10,
+          content: 'chunk 1 content',
+          category: 'source',
+          embedding: new Array(768).fill(0.1),
+          createdAt: new Date(),
+        },
+        {
+          analysisId: analysis.id,
+          filePath: 'chunk2.ts',
+          chunkIndex: 0,
+          startLine: 1,
+          endLine: 10,
+          content: 'chunk 2 content',
+          category: 'source',
+          embedding: null, // missing!
+          createdAt: new Date(),
+        },
+      ]);
+
+      const status = await service.getIndexStatus(testOwner, testRepo);
+      // Must NOT report ready because chunk 2 has null embedding
+      expect(status.status).toBe('not_indexed');
+      expect(status.error).toContain('Incomplete index');
+
+      await db.delete(repositories).where(eq(repositories.id, repo.id));
     });
   });
 });

@@ -9,8 +9,10 @@ import type {
   SearchResultItem,
   FileCategory,
   IndexStatusResponse,
+  RetrievalEngine,
+  FallbackReason,
 } from '@archlens/shared';
-import { eq, and, count } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { GitHubService } from '../github.service.js';
 import { RepositoryService } from '../repository.service.js';
 import { sanitizeErrorMessage } from '../ai/sanitize-error.js';
@@ -165,15 +167,31 @@ export class RetrievalService {
     if (options?.force) {
       await db.delete(codeChunks).where(eq(codeChunks.analysisId, analysisId));
     } else {
-      // Check if already indexed
-      const existing = await db
-        .select({ id: codeChunks.id })
-        .from(codeChunks)
-        .where(eq(codeChunks.analysisId, analysisId))
-        .limit(1);
+      // Check if already indexed and complete
+      const isVectorSupported = await hasPgVectorSupport();
+      const stats = await sql<{ total: number; valid_embeddings: number; valid_vectors: number }[]>`
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(CASE WHEN embedding IS NOT NULL THEN 1 END)::int AS valid_embeddings,
+          COUNT(CASE WHEN embedding_vec IS NOT NULL THEN 1 END)::int AS valid_vectors
+        FROM code_chunks
+        WHERE analysis_id = ${analysisId};
+      `;
+      const totalChunks = stats[0]?.total ?? 0;
+      const validEmbeddings = stats[0]?.valid_embeddings ?? 0;
+      const validVectors = stats[0]?.valid_vectors ?? 0;
+      const isComplete =
+        totalChunks > 0 &&
+        validEmbeddings === totalChunks &&
+        (!isVectorSupported || validVectors === totalChunks);
 
-      if (existing.length > 0) {
-        return { indexedChunks: existing.length };
+      if (isComplete) {
+        return { indexedChunks: totalChunks };
+      }
+
+      // If incomplete chunks exist from a failed/partial index, delete them before re-indexing
+      if (totalChunks > 0) {
+        await db.delete(codeChunks).where(eq(codeChunks.analysisId, analysisId));
       }
     }
 
@@ -186,6 +204,13 @@ export class RetrievalService {
     const contents = chunks.map((c) => c.content);
     const embeddings = await this.embeddingProvider.embed(contents);
 
+    // Invariant check: embeddings count must match chunks count
+    if (embeddings.length !== chunks.length) {
+      throw new Error(
+        `Indexing invariant violated: expected ${chunks.length} embeddings for ${chunks.length} chunks, but received ${embeddings.length}`
+      );
+    }
+
     const isVectorSupported = await hasPgVectorSupport();
 
     // Batch insert chunks (batches of 50)
@@ -194,6 +219,12 @@ export class RetrievalService {
       const slice = chunks.slice(i, i + BATCH_SIZE);
       const valuesToInsert = slice.map((chunk, sliceIdx) => {
         const globalIdx = i + sliceIdx;
+        const embedding = embeddings[globalIdx];
+        if (!embedding || embedding.length !== 768) {
+          throw new Error(
+            `Indexing invariant violated: chunk #${globalIdx} (${chunk.filePath}:${chunk.startLine}-${chunk.endLine}) missing valid 768-dim embedding`
+          );
+        }
         return {
           analysisId,
           filePath: chunk.filePath,
@@ -203,7 +234,7 @@ export class RetrievalService {
           content: chunk.content,
           language: chunk.language,
           category: chunk.category,
-          embedding: embeddings[globalIdx] || null,
+          embedding,
           createdAt: new Date(),
         };
       });
@@ -216,26 +247,43 @@ export class RetrievalService {
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         const embedding = embeddings[i];
-        if (embedding && embedding.length > 0) {
-          try {
-            const vectorStr = `[${embedding.join(',')}]`;
-            await sql`
-              UPDATE code_chunks
-              SET embedding_vec = ${vectorStr}::vector
-              WHERE analysis_id = ${analysisId}
-                AND file_path = ${chunk.filePath}
-                AND chunk_index = ${chunk.chunkIndex};
-            `;
-          } catch (err: unknown) {
-            // Graceful fallback with structured diagnostic warning if vector column update fails
-            console.warn(
-              `[RetrievalService] Failed to update pgvector column for ${chunk.filePath}#${chunk.chunkIndex}: ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            );
-          }
+        if (!embedding || embedding.length !== 768) {
+          throw new Error(
+            `Indexing invariant violated: missing 768-dim vector for pgvector column on ${chunk.filePath}#${chunk.chunkIndex}`
+          );
         }
+        const vectorStr = `[${embedding.join(',')}]`;
+        await sql`
+          UPDATE code_chunks
+          SET embedding_vec = ${vectorStr}::vector
+          WHERE analysis_id = ${analysisId}
+            AND file_path = ${chunk.filePath}
+            AND chunk_index = ${chunk.chunkIndex};
+        `;
       }
+    }
+
+    // Post-indexing verification invariant: confirm DB has valid embeddings and vectors
+    const postStats = await sql<{ total: number; valid_embeddings: number; valid_vectors: number }[]>`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(CASE WHEN embedding IS NOT NULL THEN 1 END)::int AS valid_embeddings,
+        COUNT(CASE WHEN embedding_vec IS NOT NULL THEN 1 END)::int AS valid_vectors
+      FROM code_chunks
+      WHERE analysis_id = ${analysisId};
+    `;
+    const postTotal = postStats[0]?.total ?? 0;
+    const postEmbeddings = postStats[0]?.valid_embeddings ?? 0;
+    const postVectors = postStats[0]?.valid_vectors ?? 0;
+
+    if (
+      postTotal !== chunks.length ||
+      postEmbeddings !== chunks.length ||
+      (isVectorSupported && postVectors !== chunks.length)
+    ) {
+      throw new Error(
+        `Indexing post-verification failed for analysis ${analysisId}: total=${postTotal}/${chunks.length}, valid_embeddings=${postEmbeddings}/${chunks.length}, valid_vectors=${postVectors}/${chunks.length}`
+      );
     }
 
     return { indexedChunks: chunks.length };
@@ -374,16 +422,29 @@ export class RetrievalService {
     }
 
     if (!options?.force) {
-      const [countRow] = await db
-        .select({ count: count() })
-        .from(codeChunks)
-        .where(eq(codeChunks.analysisId, record.analysisId));
+      const isVectorSupported = await hasPgVectorSupport();
+      const stats = await sql<{ total: number; valid_embeddings: number; valid_vectors: number }[]>`
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(CASE WHEN embedding IS NOT NULL THEN 1 END)::int AS valid_embeddings,
+          COUNT(CASE WHEN embedding_vec IS NOT NULL THEN 1 END)::int AS valid_vectors
+        FROM code_chunks
+        WHERE analysis_id = ${record.analysisId};
+      `;
 
-      const chunkCount = countRow?.count ?? 0;
-      if (chunkCount > 0) {
+      const totalChunks = stats[0]?.total ?? 0;
+      const validEmbeddings = stats[0]?.valid_embeddings ?? 0;
+      const validVectors = stats[0]?.valid_vectors ?? 0;
+
+      const isIndexComplete =
+        totalChunks > 0 &&
+        validEmbeddings === totalChunks &&
+        (!isVectorSupported || validVectors === totalChunks);
+
+      if (isIndexComplete) {
         const readyStatus: IndexStatusResponse = {
           status: 'ready',
-          indexedChunks: chunkCount,
+          indexedChunks: totalChunks,
           updatedAt: record.analysis.analyzedAt,
         };
         this.indexStatuses.set(key, readyStatus);
@@ -467,16 +528,29 @@ export class RetrievalService {
       return memoryStatus;
     }
 
-    const [countRow] = await db
-      .select({ count: count() })
-      .from(codeChunks)
-      .where(eq(codeChunks.analysisId, record.analysisId));
+    const isVectorSupported = await hasPgVectorSupport();
+    const stats = await sql<{ total: number; valid_embeddings: number; valid_vectors: number }[]>`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(CASE WHEN embedding IS NOT NULL THEN 1 END)::int AS valid_embeddings,
+        COUNT(CASE WHEN embedding_vec IS NOT NULL THEN 1 END)::int AS valid_vectors
+      FROM code_chunks
+      WHERE analysis_id = ${record.analysisId};
+    `;
 
-    const chunkCount = countRow?.count ?? 0;
-    if (chunkCount > 0) {
+    const totalChunks = stats[0]?.total ?? 0;
+    const validEmbeddings = stats[0]?.valid_embeddings ?? 0;
+    const validVectors = stats[0]?.valid_vectors ?? 0;
+
+    const isIndexComplete =
+      totalChunks > 0 &&
+      validEmbeddings === totalChunks &&
+      (!isVectorSupported || validVectors === totalChunks);
+
+    if (isIndexComplete) {
       const readyStatus: IndexStatusResponse = {
         status: 'ready',
-        indexedChunks: chunkCount,
+        indexedChunks: totalChunks,
         updatedAt: memoryStatus?.updatedAt || record.analysis.analyzedAt,
       };
       this.indexStatuses.set(key, readyStatus);
@@ -489,7 +563,12 @@ export class RetrievalService {
 
     const notIndexedStatus: IndexStatusResponse = {
       status: 'not_indexed',
-      indexedChunks: 0,
+      indexedChunks: totalChunks,
+      error:
+        totalChunks > 0
+          ? `Incomplete index: ${validVectors}/${totalChunks} vectors populated.`
+          : null,
+      updatedAt: memoryStatus?.updatedAt || record.analysis.analyzedAt,
     };
     this.indexStatuses.set(key, notIndexedStatus);
     return notIndexedStatus;
@@ -701,6 +780,8 @@ export class RetrievalService {
         totalMatches: results.length,
         durationMs: Date.now() - startTime,
         fallback: true,
+        engine: 'unindexed_tree',
+        fallbackReason: 'not_indexed',
         mode,
       };
     }
@@ -714,6 +795,7 @@ export class RetrievalService {
         totalMatches: results.length,
         durationMs: Date.now() - startTime,
         fallback: false,
+        engine: 'chunk_lexical',
         mode: 'lexical',
       };
     }
@@ -741,6 +823,8 @@ export class RetrievalService {
         totalMatches: results.length,
         durationMs: Date.now() - startTime,
         fallback: true,
+        engine: 'chunk_lexical',
+        fallbackReason: 'embedding_unavailable',
         mode,
       };
     }
@@ -748,6 +832,8 @@ export class RetrievalService {
     const isVectorSupported = await hasPgVectorSupport();
     let results: SearchResultItem[] = [];
     let isFallback = false;
+    let engine: RetrievalEngine = 'pgvector_hnsw';
+    let fallbackReason: FallbackReason | undefined = undefined;
 
     if (isVectorSupported) {
       try {
@@ -807,11 +893,16 @@ export class RetrievalService {
             category: r.category,
           }));
         }
-      } catch {
+      } catch (err: unknown) {
+        console.warn(`[RetrievalService] pgvector query failed, falling back to relational cosine:`, err);
         isFallback = true;
+        engine = 'relational_cosine';
+        fallbackReason = 'query_error';
       }
     } else {
       isFallback = true;
+      engine = 'relational_cosine';
+      fallbackReason = 'vector_extension_missing';
     }
 
     if (isFallback) {
@@ -874,6 +965,8 @@ export class RetrievalService {
       totalMatches: results.length,
       durationMs: Date.now() - startTime,
       fallback: isFallback,
+      engine,
+      fallbackReason: isFallback ? fallbackReason : undefined,
       mode,
     };
   }

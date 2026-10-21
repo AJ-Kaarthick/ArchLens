@@ -166,7 +166,19 @@ export function SemanticSearchView({ repository, onSelectFile }: SemanticSearchV
                   title="Click for retrieval mode details"
                 >
                   <Database size={12} />
-                  <span>{searchResponse.fallback ? 'Relational Cosine Fallback' : 'pgvector HNSW Index'}</span>
+                  <span>
+                    {searchResponse.engine === 'unindexed_tree'
+                      ? 'Unindexed Repository (Tree Search)'
+                      : searchResponse.engine === 'chunk_lexical'
+                        ? searchResponse.fallback
+                          ? 'Lexical Fallback (Embedding Unavailable)'
+                          : 'Indexed Chunks (Lexical Mode)'
+                        : searchResponse.engine === 'relational_cosine'
+                          ? searchResponse.fallbackReason === 'vector_extension_missing'
+                            ? 'Relational Cosine Fallback (No pgvector)'
+                            : 'Relational Cosine Fallback'
+                          : 'pgvector HNSW Index'}
+                  </span>
                   {showFallbackDetails ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                 </button>
 
@@ -180,25 +192,77 @@ export function SemanticSearchView({ repository, onSelectFile }: SemanticSearchV
         </CardHeader>
 
         <CardContent className="pt-2 space-y-3">
-          {/* Fallback Explanation Collapsible Drawer */}
-          {searchResponse?.fallback && showFallbackDetails && (
+          {/* Retrieval Mode Explanation Collapsible Drawer */}
+          {searchResponse && showFallbackDetails && (
             <div
               id="fallback-details-drawer"
               role="region"
               aria-label="Retrieval mode explanation"
-              className="p-3.5 bg-amber-950/30 border border-amber-800/50 rounded-xl space-y-1.5 text-xs text-amber-200/90 animate-in fade-in duration-150"
+              className={`p-3.5 border rounded-xl space-y-1.5 text-xs animate-in fade-in duration-150 ${
+                searchResponse.fallback
+                  ? 'bg-amber-950/30 border-amber-800/50 text-amber-200/90'
+                  : 'bg-cyan-950/30 border-cyan-800/50 text-cyan-200/90'
+              }`}
             >
-              <div className="font-semibold flex items-center gap-1.5 text-amber-300">
+              <div
+                className={`font-semibold flex items-center gap-1.5 ${
+                  searchResponse.fallback ? 'text-amber-300' : 'text-cyan-300'
+                }`}
+              >
                 <Info size={14} />
-                <span>Operating in Relational Cosine Fallback Mode</span>
+                <span>
+                  {searchResponse.engine === 'unindexed_tree'
+                    ? 'Operating in Unindexed Repository Mode'
+                    : searchResponse.engine === 'chunk_lexical'
+                      ? 'Operating in Chunk-Level Lexical Search Mode'
+                      : searchResponse.engine === 'relational_cosine'
+                        ? searchResponse.fallbackReason === 'vector_extension_missing'
+                          ? 'Operating in Relational Cosine Fallback Mode (No pgvector)'
+                          : 'Operating in Relational Cosine Fallback Mode'
+                        : 'Operating with Native pgvector HNSW Index'}
+                </span>
               </div>
               <p className="leading-relaxed opacity-90">
-                The local PostgreSQL development instance does not have the native{' '}
-                <code className="bg-black/30 px-1 py-0.5 rounded font-mono text-amber-100">pgvector</code>{' '}
-                extension installed. ArchLens automatically fell back to in-memory cosine similarity
-                ranking over stored embeddings. This intentional graceful-degradation path guarantees
-                zero crashes during local development, but is not representative of production pgvector
-                HNSW scale or latency.
+                {searchResponse.engine === 'unindexed_tree' ? (
+                  <>
+                    This repository has not completed chunk-level semantic indexing yet. ArchLens
+                    performed an instantaneous search over structural file trees and key architectural
+                    landmarks. Trigger repository indexing to enable full pgvector HNSW semantic retrieval.
+                  </>
+                ) : searchResponse.engine === 'chunk_lexical' ? (
+                  <>
+                    {searchResponse.fallback
+                      ? 'The embedding provider was temporarily unavailable or rate-limited. ArchLens automatically evaluated token frequencies across indexed repository code chunks.'
+                      : 'Search was evaluated via lexical keyword scoring across indexed repository code chunks.'}
+                  </>
+                ) : searchResponse.engine === 'relational_cosine' ? (
+                  searchResponse.fallbackReason === 'vector_extension_missing' ? (
+                    <>
+                      The local PostgreSQL development instance does not have the native{' '}
+                      <code className="bg-black/30 px-1 py-0.5 rounded font-mono text-amber-100">
+                        pgvector
+                      </code>{' '}
+                      extension installed. ArchLens automatically fell back to in-memory cosine
+                      similarity ranking over stored embeddings. This intentional graceful-degradation
+                      path guarantees zero crashes during local development, but is not representative
+                      of production pgvector HNSW scale or latency.
+                    </>
+                  ) : (
+                    <>
+                      A vector query evaluation issue occurred in PostgreSQL. ArchLens gracefully fell
+                      back to in-memory cosine similarity ranking over stored embeddings.
+                    </>
+                  )
+                ) : (
+                  <>
+                    Search candidates were retrieved via native PostgreSQL{' '}
+                    <code className="bg-black/30 px-1 py-0.5 rounded font-mono text-cyan-100">
+                      pgvector
+                    </code>{' '}
+                    using an HNSW index with cosine distance operators. Results reflect hybrid semantic
+                    and lexical ranking.
+                  </>
+                )}
               </p>
             </div>
           )}

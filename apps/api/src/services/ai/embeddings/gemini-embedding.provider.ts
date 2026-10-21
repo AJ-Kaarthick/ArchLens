@@ -31,18 +31,28 @@ export class GeminiEmbeddingProvider implements IEmbeddingProvider {
       allVectors.push(...batchVectors);
     }
 
+    if (allVectors.length !== texts.length) {
+      throw new Error(
+        `Gemini embedding invariant violated: expected ${texts.length} vectors for ${texts.length} texts, but received ${allVectors.length}`
+      );
+    }
+
     return allVectors;
   }
 
   async embedQuery(text: string): Promise<number[]> {
     const vectors = await this.embedBatchWithTimeout([text]);
-    if (!vectors[0] || vectors[0].length === 0) {
-      throw new Error('Gemini embedding provider returned empty vector for query');
+    if (!vectors[0] || vectors[0].length !== this.dimension) {
+      throw new Error(
+        `Gemini embedding provider returned invalid vector for query (expected dimension ${this.dimension}, got ${vectors[0]?.length ?? 0})`
+      );
     }
     return vectors[0];
   }
 
   private async embedBatchWithTimeout(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+
     const abortController = new AbortController();
 
     const timeoutPromise = new Promise<never>((_, reject) => {
@@ -58,26 +68,51 @@ export class GeminiEmbeddingProvider implements IEmbeddingProvider {
 
     const executionPromise = (async () => {
       try {
+        // Send each input as an independent Content object so @google/genai creates
+        // distinct batch request items, yielding N independent vectors for N texts.
+        const contents = texts.map((text) => ({
+          role: 'user',
+          parts: [{ text }],
+        }));
+
         const response = await this.client.models.embedContent({
           model: this.model,
-          contents: texts,
+          contents,
           config: {
-            outputDimensionality: 768,
+            outputDimensionality: this.dimension,
             abortSignal: abortController.signal,
           },
         });
 
+        let extractedVectors: number[][] = [];
+
         if (response.embeddings && response.embeddings.length > 0) {
-          return response.embeddings.map((e) => e.values || []);
+          extractedVectors = response.embeddings.map((e) => e.values || []);
+        } else if ((response as any).embedding?.values) {
+          extractedVectors = [(response as any).embedding.values];
         }
 
-        // Single content fallback
-        const singleEmb = (response as any).embedding?.values;
-        if (singleEmb) {
-          return [singleEmb];
+        if (extractedVectors.length !== texts.length) {
+          throw new Error(
+            `Gemini embedding provider returned ${extractedVectors.length} vectors for batch of ${texts.length} texts`
+          );
         }
 
-        throw new Error('No embeddings returned by Gemini API');
+        for (let i = 0; i < extractedVectors.length; i++) {
+          const vec = extractedVectors[i];
+          if (!Array.isArray(vec) || vec.length !== this.dimension) {
+            throw new Error(
+              `Gemini embedding dimension mismatch at index ${i}: expected ${this.dimension}, got ${vec?.length ?? 'undefined'}`
+            );
+          }
+          if (vec.some((v) => typeof v !== 'number' || Number.isNaN(v))) {
+            throw new Error(
+              `Gemini embedding contains invalid numeric values (NaN or non-number) at index ${i}`
+            );
+          }
+        }
+
+        return extractedVectors;
       } catch (err: any) {
         const errorMsg = String(err?.message || err);
         if (

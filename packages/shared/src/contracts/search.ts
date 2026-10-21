@@ -32,12 +32,30 @@ export const SearchResultItemSchema = z.object({
 
 export type SearchResultItem = z.infer<typeof SearchResultItemSchema>;
 
+export const RetrievalEngineSchema = z.enum([
+  'pgvector_hnsw',
+  'relational_cosine',
+  'chunk_lexical',
+  'unindexed_tree',
+]);
+export type RetrievalEngine = z.infer<typeof RetrievalEngineSchema>;
+
+export const FallbackReasonSchema = z.enum([
+  'not_indexed',
+  'embedding_unavailable',
+  'vector_extension_missing',
+  'query_error',
+]);
+export type FallbackReason = z.infer<typeof FallbackReasonSchema>;
+
 export const SearchResponseSchema = z.object({
   query: z.string(),
   results: z.array(SearchResultItemSchema),
   totalMatches: z.number().int().nonnegative(),
   durationMs: z.number().nonnegative(),
   fallback: z.boolean().default(false),
+  engine: RetrievalEngineSchema.default('pgvector_hnsw'),
+  fallbackReason: FallbackReasonSchema.optional(),
   mode: SearchModeSchema.optional(),
 });
 
