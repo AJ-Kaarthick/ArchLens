@@ -73,13 +73,17 @@ export function buildRepoUrl(owner: string, repo: string, tab?: TabId): string {
  * Navigates to a target relative URL without a full page reload,
  * updating the browser history and notifying navigation subscribers.
  */
-export function navigateTo(url: string): void {
+export function navigateTo(url: string, options?: { replace?: boolean }): void {
   if (typeof window === 'undefined') return;
 
   const current = window.location.pathname + window.location.search;
   if (current === url) return;
 
-  window.history.pushState({}, '', url);
+  if (options?.replace) {
+    window.history.replaceState({}, '', url);
+  } else {
+    window.history.pushState({}, '', url);
+  }
   window.dispatchEvent(new Event('archlens-navigation'));
 }
 

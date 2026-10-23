@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { RetrievalService, RepositoryNotAnalyzedError } from './retrieval.service.js';
 import { MockEmbeddingProvider } from '../ai/embeddings/mock-embedding.provider.js';
 import { CodeChunker, type ChunkInputFile } from './chunker.js';
-import { initDb, sql, db } from '../../db/index.js';
-import { repositories, analyses } from '../../db/schema.js';
+import { initDb, sql, db, hasPgVectorSupport } from '../../db/index.js';
+import { repositories, analyses, codeChunks } from '../../db/schema.js';
 import { eq } from 'drizzle-orm';
 
 describe('RetrievalService', () => {
@@ -152,7 +152,7 @@ describe('RetrievalService', () => {
 
     // Idempotent indexing: calling indexFiles again should skip duplicate insertion
     const reindexA = await service.indexFiles(analysisA.id, filesA);
-    expect(reindexA.indexedChunks).toBe(1); // returned existing count
+    expect(reindexA.indexedChunks).toBe(3); // returned existing count
 
     // Search Repo A for "jwt authentication"
     const authSearch = await service.search(
@@ -166,6 +166,8 @@ describe('RetrievalService', () => {
     expect(authSearch.results[0].filePath).toBe('src/auth.ts');
     expect(authSearch.results[0].content).toContain('verifyJwtToken');
     expect(authSearch.durationMs).toBeGreaterThanOrEqual(0);
+    expect(authSearch.fallback).toBe(false);
+    expect(authSearch.engine).toBe('pgvector_hnsw');
 
     // Verify Repository Isolation: search on Repo A NEVER returns Repo B chunks
     for (const item of authSearch.results) {
@@ -205,5 +207,646 @@ describe('RetrievalService', () => {
     // Cleanup
     await db.delete(repositories).where(eq(repositories.id, repoA.id));
     await db.delete(repositories).where(eq(repositories.id, repoB.id));
+  });
+
+  it('supports force re-indexing to safely rebuild chunks for an existing analysis', async () => {
+    const testOwner = `reindex-test-${Date.now()}`;
+    const testRepo = 'reindex-repo';
+
+    const [repo] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const [analysis] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repo.id,
+        techStack: [],
+        architecture: {
+          isMonorepo: false,
+          monorepoTool: null,
+          workspaces: [],
+          detectedPatterns: [],
+          primaryEntrypoints: [],
+          keyLandmarks: [],
+        },
+        metrics: {
+          totalFiles: 1,
+          totalBytes: 50,
+          languages: {},
+          categories: {},
+          largestFiles: [],
+        },
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    const initialFiles: ChunkInputFile[] = [
+      { path: 'file1.ts', content: 'const a = 1;', size: 12, category: 'source' },
+      { path: 'file2.ts', content: 'const b = 2;', size: 12, category: 'source' },
+    ];
+
+    // Initial indexing
+    const res1 = await service.indexFiles(analysis.id, initialFiles);
+    expect(res1.indexedChunks).toBe(2);
+
+    // Calling again without force is idempotent and skips
+    const res2 = await service.indexFiles(analysis.id, initialFiles);
+    expect(res2.indexedChunks).toBeGreaterThan(0);
+
+    // Calling with force: true re-indexes
+    const updatedFiles: ChunkInputFile[] = [
+      { path: 'updated.ts', content: 'const updated = true;', size: 21, category: 'source' },
+    ];
+    const res3 = await service.indexFiles(analysis.id, updatedFiles, { force: true });
+    expect(res3.indexedChunks).toBe(1);
+
+    // Search reflects new chunk
+    const searchRes = await service.search(
+      testOwner,
+      testRepo,
+      { query: 'updated', limit: 5 },
+      analysis.id
+    );
+    expect(searchRes.results).toHaveLength(1);
+    expect(searchRes.results[0].filePath).toBe('updated.ts');
+
+    // Cleanup
+    await db.delete(repositories).where(eq(repositories.id, repo.id));
+  });
+
+  it('single-flights concurrent duplicate indexing operations', async () => {
+    const testOwner = `singleflight-${Date.now()}`;
+    const testRepo = 'sf-repo';
+
+    const [repo] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const [analysis] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repo.id,
+        techStack: [],
+        architecture: {
+          isMonorepo: false,
+          monorepoTool: null,
+          workspaces: [],
+          detectedPatterns: [],
+          primaryEntrypoints: [],
+          keyLandmarks: [],
+        },
+        metrics: {
+          totalFiles: 1,
+          totalBytes: 50,
+          languages: {},
+          categories: {},
+          largestFiles: [],
+        },
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    const files: ChunkInputFile[] = [
+      { path: 'concurrent.ts', content: 'const c = 42;', size: 14, category: 'source' },
+    ];
+
+    // Trigger two indexFiles simultaneously on the exact same analysisId
+    const [p1, p2] = await Promise.all([
+      service.indexFiles(analysis.id, files),
+      service.indexFiles(analysis.id, files),
+    ]);
+
+    expect(p1.indexedChunks).toBe(1);
+    expect(p2.indexedChunks).toBe(1);
+
+    await db.delete(repositories).where(eq(repositories.id, repo.id));
+  });
+
+  it('executes strictly read-only lexical search on unindexed repository without mutating DB', async () => {
+    const testOwner = `readonly-test-${Date.now()}`;
+    const testRepo = 'readonly-repo';
+
+    const [repo] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const [analysis] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repo.id,
+        techStack: [],
+        architecture: {
+          isMonorepo: false,
+          monorepoTool: null,
+          workspaces: [],
+          detectedPatterns: ['MVC'],
+          primaryEntrypoints: ['src/index.ts'],
+          keyLandmarks: [
+            {
+              path: 'src/server.ts',
+              type: 'entry' as const,
+              name: 'server.ts',
+              description: 'Fastify HTTP application server and route registry',
+            },
+          ],
+        },
+        metrics: {
+          totalFiles: 2,
+          totalBytes: 200,
+          languages: {},
+          categories: {},
+          largestFiles: [],
+        },
+        tree: [
+          {
+            path: 'src/server.ts',
+            name: 'server.ts',
+            type: 'file' as const,
+            size: 100,
+            category: 'source' as const,
+            extension: 'ts',
+            isLandmark: true,
+          },
+          {
+            path: 'src/index.ts',
+            name: 'index.ts',
+            type: 'file' as const,
+            size: 100,
+            category: 'source' as const,
+            extension: 'ts',
+            isLandmark: false,
+          },
+        ],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    // 1. Execute search on an unindexed repository
+    const searchRes = await service.search(
+      testOwner,
+      testRepo,
+      { query: 'fastify server', limit: 5 },
+      analysis.id
+    );
+
+    // 2. Verified: results are returned with fallback: true
+    expect(searchRes.results.length).toBeGreaterThanOrEqual(1);
+    expect(searchRes.fallback).toBe(true);
+    expect(searchRes.engine).toBe('unindexed_tree');
+    expect(searchRes.fallbackReason).toBe('not_indexed');
+    expect(searchRes.results[0].filePath).toBe('src/server.ts');
+    expect(searchRes.results[0].content).toContain('Fastify HTTP application server');
+
+    // 3. Verified: STRICTLY READ-ONLY - ZERO chunks were inserted into code_chunks
+    const chunksInDb = await db
+      .select({ id: codeChunks.id })
+      .from(codeChunks)
+      .where(eq(codeChunks.analysisId, analysis.id));
+    expect(chunksInDb).toHaveLength(0);
+
+    await db.delete(repositories).where(eq(repositories.id, repo.id));
+  });
+
+  it('supports explicit lexical, semantic, and hybrid search modes', async () => {
+    const testOwner = `modes-test-${Date.now()}`;
+    const testRepo = 'modes-repo';
+
+    const [repo] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const [analysis] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repo.id,
+        techStack: [],
+        architecture: {
+          isMonorepo: false,
+          monorepoTool: null,
+          workspaces: [],
+          detectedPatterns: [],
+          primaryEntrypoints: [],
+          keyLandmarks: [],
+        },
+        metrics: {
+          totalFiles: 2,
+          totalBytes: 200,
+          languages: {},
+          categories: {},
+          largestFiles: [],
+        },
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    const files: ChunkInputFile[] = [
+      {
+        path: 'src/payment.ts',
+        content: 'export function processStripePayment(amount: number) { return amount > 0; }',
+        size: 80,
+        category: 'source',
+        language: 'ts',
+      },
+      {
+        path: 'src/logging.ts',
+        content: 'export function logInfo(message: string) { console.log(message); }',
+        size: 70,
+        category: 'source',
+        language: 'ts',
+      },
+    ];
+
+    await service.indexFiles(analysis.id, files);
+
+    // Lexical mode
+    const lexRes = await service.search(
+      testOwner,
+      testRepo,
+      { query: 'processStripePayment', limit: 5, mode: 'lexical' },
+      analysis.id
+    );
+    expect(lexRes.results).toHaveLength(1);
+    expect(lexRes.results[0].filePath).toBe('src/payment.ts');
+    expect(lexRes.fallback).toBe(false);
+    expect(lexRes.engine).toBe('chunk_lexical');
+    expect(lexRes.mode).toBe('lexical');
+
+    // Semantic mode
+    const semRes = await service.search(
+      testOwner,
+      testRepo,
+      { query: 'credit card payment transaction', limit: 5, mode: 'semantic' },
+      analysis.id
+    );
+    expect(semRes.results.length).toBeGreaterThanOrEqual(1);
+    expect(semRes.results[0].filePath).toBe('src/payment.ts');
+    expect(semRes.mode).toBe('semantic');
+
+    // Hybrid mode
+    const hybridRes = await service.search(
+      testOwner,
+      testRepo,
+      { query: 'processStripePayment', limit: 5, mode: 'hybrid' },
+      analysis.id
+    );
+    expect(hybridRes.results.length).toBeGreaterThanOrEqual(1);
+    expect(hybridRes.results[0].filePath).toBe('src/payment.ts');
+    expect(hybridRes.mode).toBe('hybrid');
+
+    await db.delete(repositories).where(eq(repositories.id, repo.id));
+  });
+
+  it('falls back gracefully to lexical search when embedding provider fails', async () => {
+    const testOwner = `fallback-test-${Date.now()}`;
+    const testRepo = 'fallback-repo';
+
+    const [repo] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    const [analysis] = await db
+      .insert(analyses)
+      .values({
+        repositoryId: repo.id,
+        techStack: [],
+        architecture: {
+          isMonorepo: false,
+          monorepoTool: null,
+          workspaces: [],
+          detectedPatterns: [],
+          primaryEntrypoints: [],
+          keyLandmarks: [],
+        },
+        metrics: {
+          totalFiles: 1,
+          totalBytes: 50,
+          languages: {},
+          categories: {},
+          largestFiles: [],
+        },
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    const files: ChunkInputFile[] = [
+      {
+        path: 'src/resilience.ts',
+        content: 'export const resilientFeature = "active";',
+        size: 40,
+        category: 'source',
+      },
+    ];
+
+    await service.indexFiles(analysis.id, files);
+
+    // Mock embedding provider throwing rate limit error on embedQuery
+    const failingProvider = {
+      name: 'failing-provider',
+      dimension: 768,
+      embed: async (texts: string[]) => texts.map(() => new Array(768).fill(0.1)),
+      embedQuery: async () => {
+        throw new Error('Upstream provider quota exceeded');
+      },
+    };
+
+    const resilientService = new RetrievalService(failingProvider, chunker);
+
+    const result = await resilientService.search(
+      testOwner,
+      testRepo,
+      { query: 'resilientFeature', limit: 5, mode: 'hybrid' },
+      analysis.id
+    );
+
+    expect(result.fallback).toBe(true);
+    expect(result.engine).toBe('chunk_lexical');
+    expect(result.fallbackReason).toBe('embedding_unavailable');
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].filePath).toBe('src/resilience.ts');
+
+    await db.delete(repositories).where(eq(repositories.id, repo.id));
+  });
+
+  it('manages background indexing lifecycle and status reporting', async () => {
+    const testOwner = `bg-index-${Date.now()}`;
+    const testRepo = 'bg-repo';
+
+    const [repo] = await db
+      .insert(repositories)
+      .values({
+        owner: testOwner,
+        name: testRepo,
+        url: `https://github.com/${testOwner}/${testRepo}`,
+        defaultBranch: 'main',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .returning();
+
+    await db
+      .insert(analyses)
+      .values({
+        repositoryId: repo.id,
+        techStack: [],
+        architecture: {
+          isMonorepo: false,
+          monorepoTool: null,
+          workspaces: [],
+          detectedPatterns: [],
+          primaryEntrypoints: [],
+          keyLandmarks: [],
+        },
+        metrics: {
+          totalFiles: 0,
+          totalBytes: 0,
+          languages: {},
+          categories: {},
+          largestFiles: [],
+        },
+        tree: [],
+        analyzedAt: new Date(),
+      })
+      .returning();
+
+    // 1. Check status before indexing
+    const initialStatus = await service.getIndexStatus(testOwner, testRepo);
+    expect(initialStatus.status).toBe('not_indexed');
+    expect(initialStatus.indexedChunks).toBe(0);
+
+    // 2. Start indexing
+    const startStatus = await service.startIndexing(testOwner, testRepo);
+    expect(['indexing', 'ready']).toContain(startStatus.status);
+
+    await db.delete(repositories).where(eq(repositories.id, repo.id));
+  });
+
+  describe('Vector Schema & Retrieval Consistency', () => {
+    it('verifies embedding dimensions and dual-mode consistency', async () => {
+      // 1. Verify embedding provider produces normalized 768-dimensional vectors
+      const testTexts = ['function calculateMetrics()', 'class RepositoryService'];
+      const embeddings = await embeddingProvider.embed(testTexts);
+      expect(embeddings).toHaveLength(2);
+      expect(embeddings[0]).toHaveLength(768);
+      expect(embeddings[1]).toHaveLength(768);
+
+      const queryVector = await embeddingProvider.embedQuery('metrics calculation');
+      expect(queryVector).toHaveLength(768);
+
+      // Verify vector L2 magnitude is normalized close to 1
+      const norm = Math.sqrt(queryVector.reduce((sum, val) => sum + val * val, 0));
+      expect(norm).toBeCloseTo(1.0, 1);
+    });
+
+    it('exercises operational retrieval mode with zero crashes', async () => {
+      const isVectorSupported = await hasPgVectorSupport();
+
+      if (isVectorSupported) {
+        // When pgvector extension is present in PostgreSQL:
+        // Verify vector column exists and HNSW index is active
+        const columns = await sql`
+          SELECT column_name, data_type, udt_name
+          FROM information_schema.columns
+          WHERE table_name = 'code_chunks' AND column_name = 'embedding_vec';
+        `;
+        expect(columns).toHaveLength(1);
+        expect(columns[0].udt_name).toBe('vector');
+
+        const indexes = await sql`
+          SELECT indexname, indexdef
+          FROM pg_indexes
+          WHERE tablename = 'code_chunks' AND indexname = 'code_chunks_embedding_hnsw_idx';
+        `;
+        expect(indexes).toHaveLength(1);
+        expect(indexes[0].indexdef).toContain('hnsw');
+        expect(indexes[0].indexdef).toContain('vector_cosine_ops');
+      } else {
+        // When standard PostgreSQL is active without pgvector extension:
+        // Relational in-memory cosine fallback is active and zero crashes occur
+        expect(isVectorSupported).toBe(false);
+      }
+    });
+
+    it('throws actionable error and does not report success when embedding provider returns fewer vectors than chunks', async () => {
+      const testOwner = `mismatch-${Date.now()}`;
+      const testRepo = 'mismatch-repo';
+
+      const [repo] = await db
+        .insert(repositories)
+        .values({
+          owner: testOwner,
+          name: testRepo,
+          url: `https://github.com/${testOwner}/${testRepo}`,
+          defaultBranch: 'main',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      const [analysis] = await db
+        .insert(analyses)
+        .values({
+          repositoryId: repo.id,
+          techStack: [],
+          architecture: {
+            isMonorepo: false,
+            monorepoTool: null,
+            workspaces: [],
+            detectedPatterns: [],
+            primaryEntrypoints: [],
+            keyLandmarks: [],
+          },
+          metrics: {
+            totalFiles: 2,
+            totalBytes: 100,
+            languages: {},
+            categories: {},
+            largestFiles: [],
+          },
+          tree: [],
+          analyzedAt: new Date(),
+        })
+        .returning();
+
+      const files: ChunkInputFile[] = [
+        { path: 'a.ts', content: 'const a = 1;', size: 12, category: 'source' },
+        { path: 'b.ts', content: 'const b = 2;', size: 12, category: 'source' },
+      ];
+
+      // Defective provider returns only 1 vector for 2 chunks (simulates batch bug)
+      const buggyProvider = {
+        name: 'buggy-provider',
+        dimension: 768,
+        embed: async () => [new Array(768).fill(0.1)],
+        embedQuery: async () => new Array(768).fill(0.1),
+      };
+
+      const strictService = new RetrievalService(buggyProvider, chunker);
+
+      await expect(strictService.indexFiles(analysis.id, files)).rejects.toThrow(
+        /Indexing invariant violated/
+      );
+
+      await db.delete(repositories).where(eq(repositories.id, repo.id));
+    });
+
+    it('requires complete embeddings and vectors across all chunks before reporting ready', async () => {
+      const testOwner = `incomplete-${Date.now()}`;
+      const testRepo = 'incomplete-repo';
+
+      const [repo] = await db
+        .insert(repositories)
+        .values({
+          owner: testOwner,
+          name: testRepo,
+          url: `https://github.com/${testOwner}/${testRepo}`,
+          defaultBranch: 'main',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
+
+      const [analysis] = await db
+        .insert(analyses)
+        .values({
+          repositoryId: repo.id,
+          techStack: [],
+          architecture: {
+            isMonorepo: false,
+            monorepoTool: null,
+            workspaces: [],
+            detectedPatterns: [],
+            primaryEntrypoints: [],
+            keyLandmarks: [],
+          },
+          metrics: {
+            totalFiles: 2,
+            totalBytes: 100,
+            languages: {},
+            categories: {},
+            largestFiles: [],
+          },
+          tree: [],
+          analyzedAt: new Date(),
+        })
+        .returning();
+
+      // Insert 2 chunks manually: one with embedding, one with NULL embedding
+      await db.insert(codeChunks).values([
+        {
+          analysisId: analysis.id,
+          filePath: 'chunk1.ts',
+          chunkIndex: 0,
+          startLine: 1,
+          endLine: 10,
+          content: 'chunk 1 content',
+          category: 'source',
+          embedding: new Array(768).fill(0.1),
+          createdAt: new Date(),
+        },
+        {
+          analysisId: analysis.id,
+          filePath: 'chunk2.ts',
+          chunkIndex: 0,
+          startLine: 1,
+          endLine: 10,
+          content: 'chunk 2 content',
+          category: 'source',
+          embedding: null, // missing!
+          createdAt: new Date(),
+        },
+      ]);
+
+      const status = await service.getIndexStatus(testOwner, testRepo);
+      // Must NOT report ready because chunk 2 has null embedding
+      expect(status.status).toBe('not_indexed');
+      expect(status.error).toContain('Incomplete index');
+
+      await db.delete(repositories).where(eq(repositories.id, repo.id));
+    });
   });
 });

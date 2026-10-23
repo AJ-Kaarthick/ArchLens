@@ -137,7 +137,8 @@ export class CodeChunker {
   }
 
   /**
-   * Chunks a single file into line-aware chunks with overlap.
+  /**
+   * Chunks a single file into line-aware chunks with overlap or section-aware chunks for Markdown.
    */
   chunkFile(file: ChunkInputFile): CodeChunk[] {
     if (!this.shouldIndexFile(file)) {
@@ -151,31 +152,108 @@ export class CodeChunker {
       return [];
     }
 
+    if (file.path.toLowerCase().endsWith('.md')) {
+      return this.chunkMarkdownFile(file, lines);
+    }
+
+    return this.chunkLines(file, lines, 0, totalLines);
+  }
+
+  /**
+   * Section-aware chunking for Markdown documents based on header boundaries (#, ##, ###).
+   */
+  private chunkMarkdownFile(file: ChunkInputFile, lines: string[]): CodeChunk[] {
+    const totalLines = lines.length;
+    const headerIndices: number[] = [];
+
+    for (let i = 0; i < totalLines; i++) {
+      if (/^#{1,3}\s+/.test(lines[i])) {
+        headerIndices.push(i);
+      }
+    }
+
+    // If file has 0 or 1 header, fall back to line chunking
+    if (headerIndices.length <= 1) {
+      return this.chunkLines(file, lines, 0, totalLines);
+    }
+
+    const sections: { start: number; end: number }[] = [];
+    if (headerIndices[0] > 0) {
+      sections.push({ start: 0, end: headerIndices[0] });
+    }
+
+    for (let i = 0; i < headerIndices.length; i++) {
+      const start = headerIndices[i];
+      const end = i + 1 < headerIndices.length ? headerIndices[i + 1] : totalLines;
+      sections.push({ start, end });
+    }
+
     const chunks: CodeChunk[] = [];
-    const step = Math.max(1, this.options.linesPerChunk - this.options.overlapLines);
     let chunkIndex = 0;
 
-    for (let startIdx = 0; startIdx < totalLines; startIdx += step) {
-      const endIdx = Math.min(totalLines, startIdx + this.options.linesPerChunk);
+    for (const sec of sections) {
+      const secLines = lines.slice(sec.start, sec.end);
+      const content = secLines.join('\n');
+      if (content.trim().length === 0) continue;
+
+      const secLength = sec.end - sec.start;
+      // If section is reasonably sized (up to 60 lines), keep it as a discrete chunk
+      if (secLength <= Math.max(50, this.options.linesPerChunk * 1.2)) {
+        chunks.push({
+          filePath: file.path,
+          chunkIndex: chunkIndex++,
+          startLine: sec.start + 1,
+          endLine: sec.end,
+          content,
+          language: file.language || 'Markdown',
+          category: file.category,
+        });
+      } else {
+        const subChunks = this.chunkLines(file, lines, sec.start, sec.end, chunkIndex);
+        chunks.push(...subChunks);
+        chunkIndex += subChunks.length;
+      }
+    }
+
+    return chunks;
+  }
+
+  /**
+   * Standard line-based sliding window chunking with configurable overlap.
+   */
+  private chunkLines(
+    file: ChunkInputFile,
+    lines: string[],
+    startOffset = 0,
+    endOffset = lines.length,
+    initialChunkIndex = 0
+  ): CodeChunk[] {
+    const totalLines = endOffset - startOffset;
+    if (totalLines <= 0) return [];
+
+    const chunks: CodeChunk[] = [];
+    const step = Math.max(1, this.options.linesPerChunk - this.options.overlapLines);
+    let chunkIndex = initialChunkIndex;
+
+    for (let i = 0; i < totalLines; i += step) {
+      const startIdx = startOffset + i;
+      const endIdx = Math.min(endOffset, startIdx + this.options.linesPerChunk);
       const chunkLines = lines.slice(startIdx, endIdx);
       const content = chunkLines.join('\n');
 
-      // Only push non-empty chunks
       if (content.trim().length > 0) {
         chunks.push({
           filePath: file.path,
-          chunkIndex,
+          chunkIndex: chunkIndex++,
           startLine: startIdx + 1, // 1-indexed
           endLine: endIdx, // 1-indexed inclusive
           content,
           language: file.language || null,
           category: file.category,
         });
-        chunkIndex++;
       }
 
-      // If this slice reached the very end of the file, break early
-      if (endIdx >= totalLines) {
+      if (endIdx >= endOffset) {
         break;
       }
     }
@@ -192,13 +270,13 @@ export class CodeChunker {
     // Filter indexable files
     const eligibleFiles = files.filter((f) => this.shouldIndexFile(f));
 
-    // Sort files to prioritize documentation landmarks (README) and core sources over configs
+    // Sort files: prioritize README landmark and core source files before generic docs/configs
     const prioritizedFiles = eligibleFiles.sort((a, b) => {
       const priority = (f: ChunkInputFile) => {
         const p = f.path.toLowerCase();
         if (p === 'readme.md') return 0;
-        if (f.category === 'doc') return 1;
-        if (f.category === 'source') return 2;
+        if (f.category === 'source') return 1;
+        if (f.category === 'doc') return 2;
         if (f.category === 'config') return 3;
         return 4;
       };

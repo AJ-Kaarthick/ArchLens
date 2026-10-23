@@ -105,6 +105,48 @@ describe('Search Contracts', () => {
       expect(parsed.totalMatches).toBe(1);
       expect(parsed.durationMs).toBe(42);
       expect(parsed.fallback).toBe(false);
+      expect(parsed.engine).toBe('pgvector_hnsw');
+      expect(parsed.fallbackReason).toBeUndefined();
+    });
+
+    it('validates fallback responses with explicit engines and fallback reasons', () => {
+      const response = {
+        query: 'router',
+        results: [],
+        totalMatches: 0,
+        durationMs: 5,
+        fallback: true,
+        engine: 'unindexed_tree' as const,
+        fallbackReason: 'not_indexed' as const,
+      };
+      const parsed = SearchResponseSchema.parse(response);
+      expect(parsed.engine).toBe('unindexed_tree');
+      expect(parsed.fallbackReason).toBe('not_indexed');
+      expect(parsed.fallback).toBe(true);
+    });
+
+    it('rejects invalid engine or fallbackReason values', () => {
+      expect(() =>
+        SearchResponseSchema.parse({
+          query: 'test',
+          results: [],
+          totalMatches: 0,
+          durationMs: 1,
+          fallback: true,
+          engine: 'invalid_engine',
+        })
+      ).toThrow();
+
+      expect(() =>
+        SearchResponseSchema.parse({
+          query: 'test',
+          results: [],
+          totalMatches: 0,
+          durationMs: 1,
+          fallback: true,
+          fallbackReason: 'invalid_reason',
+        })
+      ).toThrow();
     });
   });
 });

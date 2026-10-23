@@ -58,8 +58,18 @@ export function ExecutionView({ repository }: ExecutionViewProps) {
             repository.name
           )}/eligibility`
         );
-        const data = await res.json();
 
+        if (cancelled) return;
+
+        if (res.status === 404) {
+          setEligibility(null);
+          setEligibilityError(
+            'Execution routes are disabled on this instance (ENABLE_UNSAFE_DEV_SANDBOX=false). Host process execution is disabled by default for security.'
+          );
+          return;
+        }
+
+        const data = await res.json();
         if (cancelled) return;
 
         if (!res.ok) {
@@ -148,12 +158,13 @@ export function ExecutionView({ repository }: ExecutionViewProps) {
             <div className="space-y-1">
               <CardTitle className="text-base font-semibold text-white flex items-center gap-2">
                 <Terminal size={18} className="text-emerald-400" />
-                Sandboxed Repository Execution & Live Preview
+                Opt-in Development Execution & Live Preview
               </CardTitle>
               <p className="text-xs text-slate-400 leading-relaxed max-w-3xl">
-                Safely evaluate eligible repository entrypoints inside an ephemeral, client-agnostic
-                sandbox environment. Untrusted code executes with zero access to host secrets, bounded
-                memory, stripped network credentials, and hard timeout isolation.
+                Evaluate eligible repository entrypoints for development verification.
+                Notice: Execution runs as an ephemeral child process on the host system with strict timeout
+                limits. It is NOT a microVM or containerized isolation sandbox. Do not execute hostile or
+                untrusted code.
               </p>
             </div>
 

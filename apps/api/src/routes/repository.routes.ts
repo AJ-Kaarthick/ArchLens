@@ -5,6 +5,8 @@ import {
   GitHubRateLimitError,
   GitHubNotFoundError,
   GitHubTreeTooLargeError,
+  GitHubPrivateRepositoryError,
+  GitHubTimeoutError,
 } from '../services/github.service.js';
 import { getRateLimitConfig, type RateLimitConfig } from '../config/rate-limit.js';
 
@@ -74,6 +76,27 @@ export function createRepositoryRoutes(
             suggestedAction: err.suggestedAction,
           };
           return reply.status(429).send(errorResponse);
+        }
+
+        if (err instanceof GitHubPrivateRepositoryError) {
+          const errorResponse: ApiError = {
+            error: 'PrivateRepositoryNotSupported',
+            message: err.message,
+            isRateLimit: false,
+            suggestedAction:
+              'ArchLens currently supports public repositories only. Tenant-level access control is required for private repositories.',
+          };
+          return reply.status(403).send(errorResponse);
+        }
+
+        if (err instanceof GitHubTimeoutError) {
+          const errorResponse: ApiError = {
+            error: 'GatewayTimeout',
+            message: err.message,
+            isRateLimit: false,
+            suggestedAction: 'GitHub API request timed out. Please retry shortly.',
+          };
+          return reply.status(504).send(errorResponse);
         }
 
         if (err instanceof GitHubNotFoundError) {
@@ -224,6 +247,24 @@ export function createRepositoryRoutes(
             message: err.message,
             isRateLimit: true,
             suggestedAction: err.suggestedAction,
+          });
+        }
+
+        if (err instanceof GitHubPrivateRepositoryError) {
+          return reply.status(403).send({
+            error: 'PrivateRepositoryNotSupported',
+            message: err.message,
+            isRateLimit: false,
+            suggestedAction: 'ArchLens currently supports public repositories only.',
+          });
+        }
+
+        if (err instanceof GitHubTimeoutError) {
+          return reply.status(504).send({
+            error: 'GatewayTimeout',
+            message: err.message,
+            isRateLimit: false,
+            suggestedAction: 'GitHub API request timed out. Please retry shortly.',
           });
         }
 

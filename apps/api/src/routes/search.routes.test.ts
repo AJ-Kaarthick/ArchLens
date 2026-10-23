@@ -12,6 +12,8 @@ describe('Search Fastify Routes', () => {
 
   const mockRetrievalService = {
     search: vi.fn(),
+    startIndexing: vi.fn(),
+    getIndexStatus: vi.fn(),
   } as unknown as RetrievalService;
 
   beforeAll(async () => {
@@ -138,5 +140,91 @@ describe('Search Fastify Routes', () => {
     expect(body.error).toBe('InternalError');
     expect(body.message).not.toContain('SECRET_INTERNAL_DB_FAILURE_DO_NOT_LEAK');
     expect(body.message).toBe('An internal error occurred while executing semantic search.');
+  });
+
+  it('POST /api/repositories/:owner/:repo/index returns 202 when indexing starts', async () => {
+    (mockRetrievalService.startIndexing as any).mockResolvedValueOnce({
+      status: 'indexing',
+      indexedChunks: 0,
+      updatedAt: new Date().toISOString(),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/repositories/facebook/react/index',
+      payload: { force: true },
+    });
+
+    expect(res.statusCode).toBe(202);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('indexing');
+    expect(body.indexedChunks).toBe(0);
+  });
+
+  it('POST /api/repositories/:owner/:repo/index returns 200 when index is already ready', async () => {
+    (mockRetrievalService.startIndexing as any).mockResolvedValueOnce({
+      status: 'ready',
+      indexedChunks: 42,
+      updatedAt: new Date().toISOString(),
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/repositories/facebook/react/index',
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('ready');
+    expect(body.indexedChunks).toBe(42);
+  });
+
+  it('POST /api/repositories/:owner/:repo/index returns 404 when repository has no analysis', async () => {
+    (mockRetrievalService.startIndexing as any).mockRejectedValueOnce(
+      new RepositoryNotAnalyzedError('Repository has not been analyzed yet.')
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/repositories/facebook/react/index',
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(404);
+    const body = JSON.parse(res.body);
+    expect(body.error).toBe('RepositoryNotAnalyzed');
+  });
+
+  it('GET /api/repositories/:owner/:repo/index-status returns 200 and index status', async () => {
+    (mockRetrievalService.getIndexStatus as any).mockResolvedValueOnce({
+      status: 'ready',
+      indexedChunks: 35,
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/repositories/facebook/react/index-status',
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.status).toBe('ready');
+    expect(body.indexedChunks).toBe(35);
+  });
+
+  it('GET /api/repositories/:owner/:repo/index-status returns 404 when repository has no analysis', async () => {
+    (mockRetrievalService.getIndexStatus as any).mockRejectedValueOnce(
+      new RepositoryNotAnalyzedError('Repository has not been analyzed yet.')
+    );
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/repositories/facebook/react/index-status',
+    });
+
+    expect(res.statusCode).toBe(404);
+    const body = JSON.parse(res.body);
+    expect(body.error).toBe('RepositoryNotAnalyzed');
   });
 });

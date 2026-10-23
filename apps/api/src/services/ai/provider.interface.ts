@@ -7,12 +7,34 @@ export class AIRateLimitError extends Error {
 
   constructor(
     message = 'AI provider rate limit or quota exceeded. Please try again shortly.',
-    suggestedAction = 'Wait a moment before requesting another AI explanation, or switch to MockAIProvider.'
+    suggestedAction = 'Please wait a moment before requesting another AI explanation.'
   ) {
     super(message);
     this.name = 'AIRateLimitError';
     this.suggestedAction = suggestedAction;
   }
+}
+
+export class AITemporaryUnavailableError extends Error {
+  readonly status = 503;
+  readonly isRateLimit = false;
+  readonly isTemporaryUnavailable = true;
+  readonly suggestedAction: string;
+
+  constructor(
+    message = 'The AI explanation service is temporarily unavailable. Please try again shortly.',
+    suggestedAction = 'Please wait a moment and click Retry.'
+  ) {
+    super(message);
+    this.name = 'AITemporaryUnavailableError';
+    this.suggestedAction = suggestedAction;
+  }
+}
+
+export interface ProviderLogger {
+  info(obj: Record<string, unknown>, msg?: string): void;
+  warn(obj: Record<string, unknown>, msg?: string): void;
+  error(obj: Record<string, unknown>, msg?: string): void;
 }
 
 export interface AIExplanationRequest {
@@ -21,6 +43,9 @@ export interface AIExplanationRequest {
   context: string;
   repoName: string;
   analysis?: AnalysisResult;
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  logger?: ProviderLogger;
 }
 
 export interface AIExplanationResult {

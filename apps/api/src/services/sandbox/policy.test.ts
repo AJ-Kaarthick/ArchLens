@@ -81,6 +81,8 @@ describe('Sandbox Policy & Limit Enforcement', () => {
     it('does not contain any host secrets or user environment variables', () => {
       expect(SAFE_ENV).not.toHaveProperty('GITHUB_TOKEN');
       expect(SAFE_ENV).not.toHaveProperty('GEMINI_API_KEY');
+      expect(SAFE_ENV).not.toHaveProperty('GEMINI_FALLBACK_API_KEY');
+      expect(SAFE_ENV).not.toHaveProperty('GEMINI_TERTIARY_API_KEY');
       expect(SAFE_ENV).not.toHaveProperty('DATABASE_URL');
       expect(SAFE_ENV.NODE_ENV).toBe('production');
       expect(SAFE_ENV.PATH).toBeDefined();

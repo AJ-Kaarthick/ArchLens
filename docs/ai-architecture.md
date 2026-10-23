@@ -17,11 +17,11 @@ AI must enhance ArchLens's comprehension, not serve as an ungrounded, hallucinat
 
 1. **Grounded in Deterministic Facts:** Every claim, metric, framework detection, and architectural deduction is tied to facts already verified by Phase 2 (manifests, AST patterns, file trees, structural metrics).
 2. **Semantic Retrieval as Context Augmentation:** Semantic vector search locates relevant code and documentation chunks. These slices provide rich, localized context to the LLM but never override or invent structural repository facts.
-3. **Zero Hallucination with Evidence Citations:** Explanations produce structured `evidence` citations referencing real repository files, manifests, entrypoints, dependencies, or metrics.
+3. **Deterministic Evidence Validation:** Explanations produce structured `evidence` citations referencing real repository files, manifests, entrypoints, dependencies, or metrics, audited strictly by `EvidenceValidator`.
 4. **Provider Agnostic Abstractions:** Model generation is encapsulated behind `IAIProvider` (`GeminiAIProvider` and deterministic `MockAIProvider`). Embeddings are encapsulated behind `IEmbeddingProvider` (`GeminiEmbeddingProvider` and deterministic `MockEmbeddingProvider`).
 5. **Security & Prompt-Injection Resistance:** Untrusted user input (repository descriptions, README excerpts, and retrieved code chunks) are bounded, delimiter-sanitized, and isolated inside XML-style `<untrusted_content>` tags. The model is explicitly instructed never to execute instructions from untrusted content.
 6. **Zero Client-Side Secrets:** All AI orchestration and API credentials (`GEMINI_API_KEY`) reside exclusively on the server in `apps/api`. `apps/web` receives only validated JSON contracts.
-7. **Cost-Free Replay Caching:** Generated explanations are cached in PostgreSQL keyed on `(analysis_id, topic, COALESCE(target, ''))`. Re-requesting an explanation for a previously analyzed commit costs zero AI tokens and returns instantly.
+7. **Cost-Free Replay Caching:** Generated explanations are cached in PostgreSQL keyed on `(repository_id, commit_sha, topic, target, prompt_version)`. Re-requesting an explanation for a previously analyzed commit costs zero AI tokens and returns instantly.
 8. **EvidenceValidator Supremacy:** `EvidenceValidator` remains strictly authoritative over all retrieved context and AI claims. The model cannot assert facts from retrieved code snippets unless those claims are verified against deterministic Phase 2 analysis facts.
 9. **Zero Code Execution:** Repository code is never executed during semantic indexing or retrieval; chunks and manifests are processed strictly as static text slices.
 
@@ -44,7 +44,7 @@ AI must enhance ArchLens's comprehension, not serve as an ungrounded, hallucinat
        │
        ▼
 [AIService]
-       ├─► 1. Check PostgreSQL `ai_explanations` Cache (analysis_id, topic, target)
+       ├─► 1. Check PostgreSQL `ai_explanations` Cache (repository_id, commit_sha, topic, target, prompt_version)
        │      └─► Hit: Return cached explanation (cached: true, 0ms token latency)
        │
        ▼ Miss:
@@ -59,7 +59,7 @@ AI must enhance ArchLens's comprehension, not serve as an ungrounded, hallucinat
        │
        ▼
 [IAIProvider Interface]
-       ├─► GeminiAIProvider   (@google/genai, gemini-2.0-flash, 15s timeout)
+       ├─► GeminiAIProvider   (@google/genai, primary: gemini-3.8-flash, fallbacks: gemini-3.7-flash, gemini-3.6-flash, 18s budget)
        └─► MockAIProvider     (Deterministic, offline dynamic heuristic from AnalysisResult)
        │
        ▼
@@ -67,7 +67,7 @@ AI must enhance ArchLens's comprehension, not serve as an ungrounded, hallucinat
        ├─► Validates files/manifests/entrypoints against indexed git tree & landmarks
        ├─► Validates dependencies against detected tech stack
        ├─► Validates patterns & metrics against Phase 2 results
-       └─► Discards hallucinations; synthesizes verified fallbacks if needed
+       └─► Discards ungrounded or invalid citations strictly
        │
        ▼
 [PostgreSQL Cache] ── Stores in `ai_explanations` table
@@ -118,10 +118,18 @@ export interface IAIProvider {
 
 1. **`GeminiAIProvider` (`apps/api/src/services/ai/providers/gemini.provider.ts`):**
    - Utilizes the official `@google/genai` SDK.
-   - Default model: `gemini-2.0-flash` (configurable via `GEMINI_MODEL`).
-   - Enforces a 15-second request timeout with `AbortController`.
+   - **Multi-Tier Resilience Hierarchy:**
+     1. **Primary Model:** `gemini-3.8-flash` (configurable via `GEMINI_MODEL`, using `GEMINI_API_KEY`).
+     2. **Secondary Fallback:** `gemini-3.7-flash` (configurable via `GEMINI_FALLBACK_MODEL`, activated when `GEMINI_FALLBACK_API_KEY` is provided).
+     3. **Tertiary Fallback:** `gemini-3.6-flash` (configurable via `GEMINI_TERTIARY_MODEL`, activated when `GEMINI_TERTIARY_API_KEY` or fallback/primary keys are provided). Stable, previous-generation Flash model providing an additional model/project fallback tier, without guaranteeing immunity against Google-wide capacity outages.
+   - **Bounded Latency Budget:** Overall deadline budget of 18 seconds (`totalBudgetMs = 18000`) across all tiers, with 6-second per-attempt timeouts (`perAttemptTimeoutMs = 6000`). This bounds worst-case interactive failure under 18s (down from 28s).
+   - **Bounded Exponential Backoff with Jitter:** Bounded retries (1 retry on primary, 0 retries on secondary/tertiary fallbacks) with random jitter to prevent thundering herds on rate-limit recovery.
+   - **Optimized Thinking Configuration:** Configures `thinkingConfig: { thinkingLevel: process.env.GEMINI_THINKING_LEVEL || 'LOW' }` for Gemini 3.x Flash models. Setting thinking to `LOW` eliminates 5–10 seconds of unneeded internal reasoning tokens while maintaining rigid JSON schema adherence.
+   - **End-to-End Request Cancellation:** Propagates Fastify `request.raw.signal` through `AIService` and `GeminiAIProvider` into `client.models.generateContent` via `AbortController`, terminating upstream socket connections immediately on client disconnect or tab switch.
+   - **Non-Transient Fail-Fast:** Permanent client errors (400 Invalid Request, 401 Unauthorized, 403 Forbidden, safety filter blocks) fail immediately without retries or fallback tiers.
+   - **Comprehensive Secret Redaction:** Strips all primary, fallback, and tertiary API keys from outgoing error messages, stack traces, and application logs before client return.
    - Structured JSON output with markdown fence stripping and Zod validation.
-   - Maps quota and 429 status responses to `GeminiRateLimitError` (extending `AIRateLimitError`).
+   - Maps exhausted transient failures to `GeminiTemporaryUnavailableError` (HTTP 503 `AITemporarilyUnavailable`) and rate limits to `GeminiRateLimitError` (HTTP 429 `RateLimitExceeded`).
 
 2. **`MockAIProvider` (`apps/api/src/services/ai/providers/mock.provider.ts`):**
    - Dynamically constructs grounded, structured explanations and verified citations directly from `request.analysis` facts.
@@ -129,8 +137,8 @@ export interface IAIProvider {
    - Enables 100% offline development, automated CI tests, and graceful fallback when `GEMINI_API_KEY` is not provided.
 
 3. **`AIProviderFactory` (`apps/api/src/services/ai/provider.factory.ts`):**
-   - Inspects `AI_PROVIDER` and `GEMINI_API_KEY`.
-   - Automatically selects `GeminiAIProvider` when configured, or falls back to `MockAIProvider` gracefully.
+   - Inspects `AI_PROVIDER`, `GEMINI_API_KEY`, `GEMINI_FALLBACK_API_KEY`, and `GEMINI_TERTIARY_API_KEY`.
+   - Automatically selects `GeminiAIProvider` with fallback and tertiary options when configured, or falls back to `MockAIProvider` gracefully.
 
 ---
 
@@ -194,7 +202,7 @@ export interface IEmbeddingProvider {
 
 1. **`GeminiEmbeddingProvider` (`apps/api/src/services/ai/embeddings/gemini-embedding.provider.ts`):**
    - Uses `@google/genai` with `client.models.embedContent`.
-   - Default model: `text-embedding-004` (768 dimensions).
+   - Default model: `gemini-embedding-2` (768 dimensions via outputDimensionality).
    - Configurable via `GEMINI_EMBEDDING_MODEL` environment variable.
    - Enforces 15-second timeout and maps HTTP 429 quota exhaustion to `AIRateLimitError`.
 
@@ -260,7 +268,7 @@ Located in `apps/api/src/services/retrieval/retrieval.service.ts`:
    - Under the mock/fallback path, low-confidence, broad, or unrelated queries may still return results from the indexed chunk set.
    - We make no claim of high semantic accuracy or perfect relevance under the mock embedding and relational fallback configuration.
 5. **Production Evaluation Requirements:**
-   - Evaluating production-grade retrieval quality requires a PostgreSQL database with native `pgvector` support (e.g., `pgvector/pgvector:pg16`) and real embeddings from `GeminiEmbeddingProvider` (`text-embedding-004`).
+   - Evaluating production-grade retrieval quality requires a PostgreSQL database with native `pgvector` support (e.g., `pgvector/pgvector:pg16`) and real embeddings from `GeminiEmbeddingProvider` (`gemini-embedding-2`).
 6. **Deterministic Baseline as Authoritative Source of Truth:**
    - Phase 2 repository analysis (manifests, trees, metrics, framework detection) remains the sole authoritative source of repository facts.
    - Semantic retrieval is an assistive context-augmentation mechanism, never the source of structural truth.

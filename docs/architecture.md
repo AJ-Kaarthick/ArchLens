@@ -57,7 +57,7 @@ apps/api/src/
 │   │   ├── embeddings/
 │   │   │   ├── embedding.interface.ts # IEmbeddingProvider contract
 │   │   │   ├── embedding-provider.factory.ts # Factory dispatch & fallback
-│   │   │   ├── gemini-embedding.provider.ts # text-embedding-004
+│   │   │   ├── gemini-embedding.provider.ts # gemini-embedding-2
 │   │   │   └── mock-embedding.provider.ts # Deterministic 768-dim L2 vector generator
 │   │   └── providers/
 │   │       ├── gemini.provider.ts# Google Gemini (@google/genai)

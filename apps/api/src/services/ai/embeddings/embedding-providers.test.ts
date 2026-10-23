@@ -66,28 +66,81 @@ describe('Embedding Providers', () => {
       );
     });
 
-    it('defaults model to text-embedding-004', () => {
+    it('defaults model to gemini-embedding-2', () => {
       const provider = new GeminiEmbeddingProvider({ apiKey: 'fake-key' });
-      expect(provider.model).toBe('text-embedding-004');
+      expect(provider.model).toBe('gemini-embedding-2');
       expect(provider.dimension).toBe(768);
     });
 
-    it('calls client.models.embedContent and parses embeddings', async () => {
+    it('calls client.models.embedContent with independent Content objects and parses embeddings', async () => {
       const provider = new GeminiEmbeddingProvider({ apiKey: 'fake-key' });
-      const mockVector = new Array(768).fill(0.01);
+      const mockVector1 = new Array(768).fill(0.01);
+      const mockVector2 = new Array(768).fill(0.02);
       const mockClient = (provider as any).client;
 
       mockClient.models.embedContent = vi.fn().mockResolvedValue({
-        embeddings: [{ values: mockVector }, { values: mockVector }],
+        embeddings: [{ values: mockVector1 }, { values: mockVector2 }],
       });
 
       const res = await provider.embed(['text 1', 'text 2']);
       expect(res).toHaveLength(2);
-      expect(res[0]).toEqual(mockVector);
+      expect(res[0]).toEqual(mockVector1);
+      expect(res[1]).toEqual(mockVector2);
       expect(mockClient.models.embedContent).toHaveBeenCalledWith({
-        model: 'text-embedding-004',
-        contents: ['text 1', 'text 2'],
+        model: 'gemini-embedding-2',
+        contents: [
+          { role: 'user', parts: [{ text: 'text 1' }] },
+          { role: 'user', parts: [{ text: 'text 2' }] },
+        ],
+        config: {
+          outputDimensionality: 768,
+          abortSignal: expect.any(AbortSignal),
+        },
       });
+    });
+
+    it('throws actionable error when API returns fewer embeddings than requested texts', async () => {
+      const provider = new GeminiEmbeddingProvider({ apiKey: 'fake-key' });
+      const mockVector = new Array(768).fill(0.01);
+      const mockClient = (provider as any).client;
+
+      // Bug reproduction: API returns 1 embedding when 3 texts were sent
+      mockClient.models.embedContent = vi.fn().mockResolvedValue({
+        embeddings: [{ values: mockVector }],
+      });
+
+      await expect(provider.embed(['text 1', 'text 2', 'text 3'])).rejects.toThrow(
+        /Gemini embedding provider returned 1 vectors for batch of 3 texts/
+      );
+    });
+
+    it('throws actionable error when embedding dimension is not 768', async () => {
+      const provider = new GeminiEmbeddingProvider({ apiKey: 'fake-key' });
+      const invalidVector = new Array(512).fill(0.01);
+      const mockClient = (provider as any).client;
+
+      mockClient.models.embedContent = vi.fn().mockResolvedValue({
+        embeddings: [{ values: invalidVector }],
+      });
+
+      await expect(provider.embed(['text 1'])).rejects.toThrow(
+        /Gemini embedding dimension mismatch at index 0: expected 768, got 512/
+      );
+    });
+
+    it('throws actionable error when embedding values contain NaN', async () => {
+      const provider = new GeminiEmbeddingProvider({ apiKey: 'fake-key' });
+      const nanVector = new Array(768).fill(0.01);
+      nanVector[5] = NaN;
+      const mockClient = (provider as any).client;
+
+      mockClient.models.embedContent = vi.fn().mockResolvedValue({
+        embeddings: [{ values: nanVector }],
+      });
+
+      await expect(provider.embed(['text 1'])).rejects.toThrow(
+        /Gemini embedding contains invalid numeric values/
+      );
     });
 
     it('maps quota and 429 errors to AIRateLimitError', async () => {

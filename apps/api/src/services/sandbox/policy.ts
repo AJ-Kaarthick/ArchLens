@@ -4,14 +4,13 @@ import path from 'node:path';
 /**
  * Sandbox Execution Policy & Resource Limits
  *
- * NOTE on Security Boundaries:
- * - Isolation, environment sanitization, strict filesystem boundaries, process-group termination,
- *   hard timeouts, bounded output buffers, and a deny-by-default execution policy constitute the primary
- *   security boundaries.
- * - NODE_MAX_OLD_SPACE_SIZE_MB (--max-old-space-size) is an in-process V8 heap safeguard, NOT a kernel-level
- *   cgroup or OS-level memory limit. In a local single-host Node process model without root cgroups, this flag
- *   ensures the V8 runtime triggers Out-Of-Memory termination if the JS heap exceeds this threshold.
- * - All host secrets (GITHUB_TOKEN, GEMINI_API_KEY, DATABASE_URL, host user env) are completely stripped.
+ * SECURITY WARNING & ARCHITECTURAL LIMITATIONS:
+ * - This execution subsystem uses a host-process Node.js runner executing under the API process's OS user.
+ * - It is NOT a kernel-isolated container, Linux cgroup/namespace, or microVM sandbox.
+ * - It CANNOT safely contain malicious, hostile, or adversarial code.
+ * - For production deployments and default product workflows, execution and preview routes MUST
+ *   remain disabled.
+ * - An unsafe development mode is available solely for local testing via ENABLE_UNSAFE_DEV_SANDBOX=yes.
  */
 export const SANDBOX_LIMITS = {
   /** Maximum number of files permitted in a sandboxed workspace */
@@ -122,16 +121,26 @@ export function validateArgs(args?: unknown[]): string[] {
 }
 
 /**
- * Determines whether sandboxed execution is enabled.
- * Default is disabled (safe) in production environments unless ENABLE_SANDBOX=true.
- * In development/test environments, it defaults to enabled unless explicitly set to false/0.
+ * Determines whether unsafe development sandbox execution is enabled.
+ * Default is STRICTLY DISABLED across all environments (production, development, test).
+ * To enable in local development, caller must explicitly set ENABLE_UNSAFE_DEV_SANDBOX=yes (or true/1).
+ *
+ * SECURITY NOTE:
+ * The execution subsystem runs Node.js as the host API user and is NOT kernel-isolated.
+ * It is unsafe for hostile or untrusted code and must remain gated from the normal product path.
  */
-export function isSandboxEnabled(
+export function isUnsafeDevSandboxEnabled(
   env: Record<string, string | undefined> = process.env
 ): boolean {
-  const val = env.ENABLE_SANDBOX?.toLowerCase()?.trim();
-  if (val !== undefined) {
-    return val === 'true' || val === '1';
+  const explicitOptIn = env.ENABLE_UNSAFE_DEV_SANDBOX?.toLowerCase()?.trim();
+  if (explicitOptIn !== undefined) {
+    return explicitOptIn === 'true' || explicitOptIn === 'yes' || explicitOptIn === '1';
   }
-  return env.NODE_ENV !== 'production';
+  const legacyVal = env.ENABLE_SANDBOX?.toLowerCase()?.trim();
+  if (legacyVal !== undefined) {
+    return legacyVal === 'true' || legacyVal === 'yes' || legacyVal === '1';
+  }
+  return false;
 }
+
+export const isSandboxEnabled = isUnsafeDevSandboxEnabled;

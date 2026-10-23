@@ -14,15 +14,18 @@ describe('Execution Fastify Routes', () => {
   } as unknown as ExecutionService;
 
   beforeAll(async () => {
+    process.env.ENABLE_UNSAFE_DEV_SANDBOX = 'yes';
     app = buildApp({
       logger: false,
       executionService: mockExecutionService,
       workspaceManager: mockWsManager,
+      enableUnsafeDevSandbox: true,
     });
     await app.ready();
   });
 
   afterAll(async () => {
+    delete process.env.ENABLE_UNSAFE_DEV_SANDBOX;
     mockWsManager.destroy();
     await app.close();
   });

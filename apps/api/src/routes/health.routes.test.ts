@@ -120,8 +120,8 @@ describe('Health Routes', () => {
     expect(JSON.stringify(body)).not.toContain('password authentication');
   });
 
-  it('preserves existing application version "0.1.0" consistently across health endpoints', async () => {
-    expect(ARCHLENS_VERSION).toBe('0.1.0');
+  it('reports application version "1.0.0" consistently across health endpoints', async () => {
+    expect(ARCHLENS_VERSION).toBe('1.0.0');
     const app = Fastify();
     await app.register(
       createHealthRoutes({
@@ -131,14 +131,14 @@ describe('Health Routes', () => {
 
     const resHealth = await app.inject({ method: 'GET', url: '/health' });
     expect(resHealth.statusCode).toBe(200);
-    expect(resHealth.json().version).toBe('0.1.0');
+    expect(resHealth.json().version).toBe('1.0.0');
 
     const resLiveness = await app.inject({ method: 'GET', url: '/health/liveness' });
     expect(resLiveness.statusCode).toBe(200);
-    expect(resLiveness.json().version).toBe('0.1.0');
+    expect(resLiveness.json().version).toBe('1.0.0');
 
     const resReadiness = await app.inject({ method: 'GET', url: '/health/readiness' });
     expect(resReadiness.statusCode).toBe(200);
-    expect(resReadiness.json().version).toBe('0.1.0');
+    expect(resReadiness.json().version).toBe('1.0.0');
   });
 });

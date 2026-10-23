@@ -206,11 +206,12 @@ Generates or retrieves a cached grounded AI explanation for a previously analyze
   ```json
   {
     "topic": "overview",
-    "target": "apps/api"
+    "target": "apps/api",
+    "bypassCache": false
   }
   ```
 
-  _(`topic` defaults to `"overview"`. Valid topics: `"overview"`, `"architecture"`, `"tech-stack"`, `"entrypoints"`. `target` is optional)._
+  _(`topic` defaults to `"overview"`. Valid topics: `"overview"`, `"architecture"`, `"tech-stack"`, `"entrypoints"`. `target` is optional. `bypassCache` defaults to `false`; when set to `true`, forces fresh generation and invalidates existing cached row)._
 
 - **Success Response (`200 OK`):**
   Returns `ExplainResponse`:
@@ -242,17 +243,20 @@ Generates or retrieves a cached grounded AI explanation for a previously analyze
     ],
     "generatedAt": "2026-09-11T00:30:00.000Z",
     "provider": "gemini",
-    "model": "gemini-2.0-flash",
+    "model": "gemini-3.8-flash",
 
     "cached": true
   }
   ```
 
 - **Error Responses:**
-  - `400 Bad Request`: When `topic` is invalid or request body fails schema validation.
+  - `400 Bad Request`: When `topic` is invalid or request body fails schema validation (`InvalidAIRequest`).
+  - `401 Unauthorized`: When server-side AI provider authentication fails (`AIAuthenticationError`).
+  - `403 Forbidden`: When AI provider rejects the request or content is blocked by safety filters (`AIPermissionError`).
   - `404 Not Found`: When the repository has not been analyzed yet via `POST /api/analyze`.
-  - `429 Too Many Requests`: When the configured AI provider rate limit or quota is exceeded (returns structured `ApiError` with `isRateLimit: true` and recovery action).
-  - `500 Internal Server Error`: Returns a sanitized user-facing error message (`"An internal error occurred while generating the AI explanation."`) to prevent exposing internal exception details or stack traces.
+  - `429 Too Many Requests`: When the configured AI provider rate limit or quota is exceeded across primary and fallback (`RateLimitExceeded` with `isRateLimit: true`).
+  - `503 Service Unavailable`: When upstream AI provider encounters transient outages (UNAVAILABLE/5xx) and retries/fallbacks are exhausted (`AITemporarilyUnavailable` with `isRateLimit: false`).
+  - `500 Internal Server Error`: Returns a sanitized user-facing error message (`"An internal error occurred while generating the AI explanation."`) to prevent exposing internal exception details, stack traces, or credentials.
 
 ---
 
@@ -421,6 +425,6 @@ Liveness and version check.
   ```json
   {
     "status": "ok",
-    "version": "0.1.0"
+    "version": "1.0.0"
   }
   ```

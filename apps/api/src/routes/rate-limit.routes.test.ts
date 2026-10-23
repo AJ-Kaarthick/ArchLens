@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildApp } from '../server.js';
+import { buildApp, parseTrustProxy } from '../server.js';
 import type { RepositoryService } from '../services/repository.service.js';
 import type { AIService } from '../services/ai/ai.service.js';
 import type { RetrievalService } from '../services/retrieval/retrieval.service.js';
@@ -82,6 +82,7 @@ describe('Rate Limiting', () => {
 
     const app = buildApp({
       logger: false,
+      enableUnsafeDevSandbox: true,
       executionService: mockExecService,
       rateLimitConfig: {
         analyzeMax: 10,
@@ -221,5 +222,81 @@ describe('Rate Limiting', () => {
       const resHealth = await app.inject({ method: 'GET', url: '/health' });
       expect(resHealth.statusCode).toBe(200);
     }
+  });
+
+  describe('Trust Proxy & Reverse Proxy Topology', () => {
+    it('parseTrustProxy helper parses configurations safely', () => {
+      // Default unset trusts private/local networks (Docker compose topology)
+      expect(parseTrustProxy(undefined)).toEqual(['loopback', 'linklocal', 'uniquelocal']);
+      expect(parseTrustProxy('')).toEqual(['loopback', 'linklocal', 'uniquelocal']);
+
+      // Explicit disable for direct internet exposure
+      expect(parseTrustProxy('false')).toBe(false);
+      expect(parseTrustProxy('0')).toBe(false);
+      expect(parseTrustProxy('off')).toBe(false);
+
+      // Explicit enable
+      expect(parseTrustProxy('true')).toBe(true);
+
+      // Hop count
+      expect(parseTrustProxy('1')).toBe(1);
+
+      // Custom subnet list
+      expect(parseTrustProxy('127.0.0.1, 10.0.0.0/8')).toEqual(['127.0.0.1', '10.0.0.0/8']);
+    });
+
+    it('distinguishes distinct client IPs behind trusted proxy so one user does not rate limit another', async () => {
+      const mockRepoService = {
+        analyze: async () => ({
+          repository: { owner: 'test', name: 'repo', defaultBranch: 'main' },
+          techStack: [],
+          metrics: { totalFiles: 1, totalBytes: 100, languages: {}, categories: {}, largestFiles: [] },
+          architecture: { patterns: [], primaryEntrypoints: [] },
+          tree: [],
+          analyzedAt: new Date().toISOString(),
+        }),
+      } as unknown as RepositoryService;
+
+      const app = buildApp({
+        logger: false,
+        trustProxy: true,
+        repositoryService: mockRepoService,
+        rateLimitConfig: {
+          analyzeMax: 1,
+          executeMax: 1,
+          explainMax: 1,
+          searchMax: 1,
+          generalMax: 10,
+          timeWindowMs: 60000,
+        },
+      });
+
+      // Client A makes 1 request -> succeeds
+      const resA1 = await app.inject({
+        method: 'POST',
+        url: '/api/analyze',
+        headers: { 'x-forwarded-for': '198.51.100.1' },
+        payload: { url: 'test/repo' },
+      });
+      expect(resA1.statusCode).toBe(200);
+
+      // Client A makes 2nd request -> rate limited
+      const resA2 = await app.inject({
+        method: 'POST',
+        url: '/api/analyze',
+        headers: { 'x-forwarded-for': '198.51.100.1' },
+        payload: { url: 'test/repo' },
+      });
+      expect(resA2.statusCode).toBe(429);
+
+      // Client B makes request -> MUST succeed because client B has a separate IP
+      const resB1 = await app.inject({
+        method: 'POST',
+        url: '/api/analyze',
+        headers: { 'x-forwarded-for': '198.51.100.2' },
+        payload: { url: 'test/repo' },
+      });
+      expect(resB1.statusCode).toBe(200);
+    });
   });
 });

@@ -8,9 +8,9 @@ ArchLens is an open-source platform that enables developers, contributors, and t
 
 ## Project Status
 
-**Current Status:** Phase 6 Complete (Client-Agnostic Sandboxed Repository Execution & Live Preview Subsystem).
+**Current Status:** ArchLens v1.0.0 — Production Ready.
 
-ArchLens features a fully functional, deterministic repository analysis engine, paired with a grounded AI reasoning layer, intelligent code chunking with dual-mode vector search (PostgreSQL `pgvector` with relational cosine fallback), a refined, accessible React developer explorer, and a secure, client-agnostic sandboxed execution and live preview subsystem.
+ArchLens features a fully functional, deterministic repository analysis engine, paired with an optional, grounded AI reasoning layer, intelligent code chunking with dual-mode vector search (PostgreSQL `pgvector` with relational cosine fallback), a refined, accessible React developer explorer, an optional host execution and live preview subsystem (disabled by default in production), production-ready Drizzle migrations, in-memory rate limiting, and unprivileged Docker containerization.
 
 ---
 
@@ -22,11 +22,11 @@ Gaining a quick, accurate mental model of a new or unfamiliar repository is trad
 - **Environment friction:** Requiring specific language toolchains, SDK versions, or container daemons just to evaluate a project.
 - **AI hallucination risks:** Off-the-shelf LLMs routinely guess project dependencies, hallucinate outdated patterns, and misstate repository structures when ungrounded.
 
-ArchLens solves this by establishing a **factual, deterministic baseline** first. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any AI reasoning occurs. AI reasoning is strictly constrained to explaining verified facts with verifiable evidence citations. Semantic retrieval augments reasoning by locating relevant code slices without altering structural facts. For eligible repositories, sandboxed execution safely evaluates entrypoints without host compromise.
+ArchLens solves this by establishing a **factual, deterministic baseline** as its primary product. It analyzes the actual repository tree, parses package manifests, extracts framework versions, detects monorepo layouts, categorizes file types, and calculates exact language metrics before any AI reasoning occurs. AI reasoning is an optional enhancement strictly constrained to explaining verified facts with verifiable evidence citations audited by `EvidenceValidator`. Semantic retrieval augments reasoning by locating relevant code slices without altering structural facts. Host-process execution is restricted and disabled by default in production deployments.
 
 ---
 
-## What Works Today (Phase 1 through Phase 6)
+## What Works Today (Phase 1 through Phase 7)
 
 - **Bounded GitHub Ingestion:** Fetches repository metadata and recursive file trees via the GitHub REST API v3 without git cloning.
 - **Safety Bounds:** Enforces a strict 10,000-item tree bound, 256 KB landmark file preview bound, max 100 files, and max 500 code chunks per repository.
@@ -37,11 +37,11 @@ ArchLens solves this by establishing a **factual, deterministic baseline** first
 - **Structural Metrics:** Computes language breakdowns, file category distributions, total bytes, and identifies top 10 largest files.
 - **Semantic Code Retrieval & Search:** Line-aware chunking engine (50 lines per chunk, 10-line overlap) for source, doc, and config files with metadata filtering (category and limit in the UI; pathPrefix at the API level), similarity score ranking, and execution timing—operating purely on indexed text slices without executing repository code.
 - **Dual-Mode Vector Persistence:** PostgreSQL `code_chunks` table supporting native `pgvector` (HNSW cosine distance) when the extension is available, with an automatic, zero-crash relational and in-memory cosine similarity fallback.
-- **Embedding Provider Abstraction:** Flexible backend interface (`IEmbeddingProvider`) supporting Google Gemini (`text-embedding-004` via `@google/genai`) and a deterministic `MockEmbeddingProvider` for 100% offline development and testing without API keys.
+- **Embedding Provider Abstraction:** Flexible backend interface (`IEmbeddingProvider`) supporting Google Gemini (`gemini-embedding-2` via `@google/genai`) and a deterministic `MockEmbeddingProvider` for 100% offline development and testing without API keys.
 - **Grounded AI Explanation Layer:** Generates fact-backed architectural explanations across four distinct topics: Repository Overview, Architecture & Patterns, Tech Stack Synergy, and Runtime Entrypoints, augmented by relevant semantic code slices. `EvidenceValidator` remains strictly authoritative over all retrieved context and generated claims.
 - **Evidence Citations:** Every AI explanation includes verifiable citations pointing directly to real manifests, landmark files, dependencies, entrypoints, and structural metrics with one-click modal previews.
 - **Prompt-Injection Defense:** Untrusted repository content (README, description, and retrieved code chunks) is bounded, sanitized, and isolated inside `<untrusted_content>` tags, preventing malicious repository instructions from subverting AI reasoning.
-- **AI Provider Abstraction:** Backend interface (`IAIProvider`) supporting Google Gemini (`gemini-2.0-flash`) and a deterministic `MockAIProvider`.
+- **AI Provider Abstraction:** Backend interface (`IAIProvider`) supporting Google Gemini (`gemini-3.8-flash`) and a deterministic `MockAIProvider`.
 - **PostgreSQL Explanation Caching:** Explanations are cached in `ai_explanations` keyed on `(analysis_id, topic, target)` for instant, zero-token replay with transparent cache hit indicators.
 - **Client-Agnostic Sandboxed Execution:** Reusable backend execution engine in `apps/api` and contracts in `packages/shared`, consumable identically by ArchLens Web, future VS Code extensions, and future browser extensions.
 - **Initial Hardened Profiles:** Pluggable execution currently supporting `node-script` (standalone JavaScript/Node scripts) and `static-web` (HTML/CSS/JS frontend preview).
@@ -110,7 +110,7 @@ Categorization & Landmarks                         Tech Stack Detection         
 | **Frontend**               | React 18, Vite 4, Tailwind CSS, Lucide React, `react-markdown`                    |
 | **Backend**                | Node.js 20+, Fastify 4, `@fastify/cors`, `postgres.js`                            |
 | **Database & Vector**      | PostgreSQL 16 (`pgvector` + relational cosine fallback), Drizzle ORM, Drizzle Kit |
-| **Embeddings & AI**        | `@google/genai` (`text-embedding-004`, `gemini-2.0-flash`), Mock Providers        |
+| **Embeddings & AI**        | `@google/genai` (`gemini-embedding-2`, `gemini-3.8-flash`), Mock Providers        |
 | **Contracts & Validation** | Zod 3, TypeScript 5 (Strict Mode, ESM)                                            |
 | **Workspace & Tooling**    | `pnpm` workspaces, Vitest, ESLint, Prettier                                       |
 
@@ -190,14 +190,19 @@ The backend accepts the following optional environment variables:
 | `GITHUB_TOKEN`           | Optional GitHub Personal Access Token (server-side only) to increase REST rate limits from 60 to 5,000 req/hr | _None_                                                 |
 | `GEMINI_API_KEY`         | Optional Google Gemini API key (server-side only). When omitted, ArchLens uses Mock providers gracefully      | _None_                                                 |
 | `AI_PROVIDER`            | AI explanation provider override (`gemini` or `mock`). Defaults to `gemini` if API key set, else `mock`       | `gemini` (if key set) / `mock`                         |
-| `GEMINI_MODEL`           | Gemini generation model name                                                                                  | `gemini-2.0-flash`                                     |
+| `GEMINI_MODEL`           | Gemini generation model name                                                                                  | `gemini-3.8-flash`                                     |
+| `GEMINI_FALLBACK_API_KEY`| Optional secondary Gemini project API key for automatic retry fallback on transient 503/429 outages         | _None_                                                 |
+| `GEMINI_FALLBACK_MODEL`  | Gemini fallback generation model name                                                                         | `gemini-3.7-flash`                                     |
+| `GEMINI_TERTIARY_API_KEY`| Optional tertiary Gemini project API key for additional model/project fallback tier                          | _None_                                                 |
+| `GEMINI_TERTIARY_MODEL`  | Gemini tertiary fallback generation model name                                                                | `gemini-3.6-flash`                                     |
+| `GEMINI_THINKING_LEVEL`  | Thinking level for Gemini 3.x Flash (`LOW`, `MEDIUM`, `HIGH`) to control latency vs internal reasoning tokens  | `LOW`                                                  |
 | `EMBEDDING_PROVIDER`     | Embedding provider override (`gemini` or `mock`). Defaults to `gemini` if API key set, else `mock`            | `gemini` (if key set) / `mock`                         |
-| `GEMINI_EMBEDDING_MODEL` | Gemini text embedding model name                                                                              | `text-embedding-004`                                   |
+| `GEMINI_EMBEDDING_MODEL` | Gemini text embedding model name                                                                              | `gemini-embedding-2`                                   |
 | `PORT`                   | API server port                                                                                               | `3000`                                                 |
 | `HOST`                   | API server host interface                                                                                     | `0.0.0.0`                                              |
 
 > [!NOTE]
-> `GITHUB_TOKEN` and `GEMINI_API_KEY` are strictly consumed server-side inside `apps/api`. They are never bundled, passed, or exposed to `apps/web` or `packages/shared`. When `GEMINI_API_KEY` is omitted, ArchLens runs 100% offline with `MockAIProvider` and `MockEmbeddingProvider`.
+> `GITHUB_TOKEN`, `GEMINI_API_KEY`, `GEMINI_FALLBACK_API_KEY`, and `GEMINI_TERTIARY_API_KEY` are strictly consumed server-side inside `apps/api`. They are never bundled, passed, or exposed to `apps/web` or `packages/shared`. When `GEMINI_API_KEY` is omitted, ArchLens runs 100% offline with `MockAIProvider` and `MockEmbeddingProvider`.
 
 ### 4. Run Database Migrations
 
@@ -363,9 +368,12 @@ Executes semantic search over repository code chunks with vector or cosine simil
 - **Dual-Mode:** Returns native `pgvector` HNSW distance when available, or relational in-memory cosine ranking fallback transparently.
 - **UI vs. API Capabilities:** The REST API supports `pathPrefix` filtering (e.g. `apps/api`), whereas the current web UI provides query input, category filtering (`source`, `doc`, `config`), and result limit controls (`3`, `5`, `10`, `20`).
 
-### `GET /health`
+### `GET /health`, `GET /health/liveness`, `GET /health/readiness`
 
-Liveness check returning service status and shared contract version.
+Standardized health probes for container orchestration and monitoring:
+- `GET /health/liveness`: Process liveness check returning service status, uptime, and application version `1.0.0`.
+- `GET /health/readiness`: Database readiness probe verifying PostgreSQL connectivity.
+- `GET /health`: Backward-compatible health probe returning `{ status: "ok", version: "1.0.0" }`.
 
 ---
 
@@ -374,7 +382,7 @@ Liveness check returning service status and shared contract version.
 - **Tree Size Bound:** Max 10,000 items. Repositories exceeding this bound or returning a truncated tree are rejected to prevent memory pressure.
 - **Landmark File Size Bound:** Max 256 KB. Files larger than 256 KB have their content truncated in previews.
 - **Chunking Bounds:** Max 100 candidate files and max 500 chunks per repository snapshot. Chunks are 50 lines with 10-line overlap.
-- **Execution Model:** Synchronous REST execution. Asynchronous queue workers (BullMQ/Redis) are planned for Phase 6.
+- **Execution Model:** Synchronous REST execution. Bounded repository workloads and expected deployment scale remain synchronously bounded by explicit HTTP/request/resource limits without requiring background queue infrastructure.
 
 ### Semantic Retrieval & Operational Limitations
 
@@ -382,7 +390,7 @@ Liveness check returning service status and shared contract version.
 2. **Intentional Graceful Degradation:** The relational fallback is an intentional development and graceful-degradation mechanism. It must **not** be characterized as computationally or architecturally equivalent to production `pgvector` retrieval with HNSW indexing.
 3. **Deterministic Mock Embeddings:** In offline development, automated CI suites, or when `GEMINI_API_KEY` is omitted, ArchLens uses `MockEmbeddingProvider`. This provider produces deterministic 768-dimensional normalized vectors via token and n-gram hashing. Its retrieval quality is **not** representative of production semantic-search quality.
 4. **Known Retrieval-Quality Limitation:** Under the mock embedding provider and relational cosine fallback, low-confidence, broad, or unrelated search queries may still return results from the indexed chunk set. We make no claim of high semantic accuracy or deep language comprehension under the mock/fallback configuration.
-5. **Production Evaluation Requirement:** Rigorous semantic retrieval quality evaluation requires running a PostgreSQL instance with native `pgvector` (e.g., `pgvector/pgvector:pg16`) and configuring a real embedding model (`GEMINI_API_KEY` with `text-embedding-004`).
+5. **Production Evaluation Requirement:** Rigorous semantic retrieval quality evaluation requires running a PostgreSQL instance with native `pgvector` (e.g., `pgvector/pgvector:pg16`) and configuring a real embedding model (`GEMINI_API_KEY` with `gemini-embedding-2`).
 6. **Deterministic Baseline Remains Source of Truth:** Phase 2 deterministic analysis (package manifests, verified git trees, entrypoints, and metrics) remains the sole authoritative source of repository facts. Semantic retrieval serves strictly as a relevance and context-augmentation mechanism—never as a source of truth.
 7. **Evidence Grounding Authority:** `EvidenceValidator` remains strictly authoritative over retrieved context; citations must pass Phase 2 grounding checks before persistence or client presentation.
 8. **UI Filtering Controls:** The web UI currently exposes category filtering and result-limit controls. It does **not** expose a dedicated Path Prefix input, even though `pathPrefix` is supported by the backend API.
@@ -396,15 +404,19 @@ Liveness check returning service status and shared contract version.
 - **[x] Phase 2:** Bounded GitHub REST ingestion, deterministic analysis, PostgreSQL persistence, React web explorer.
 - **[x] Phase 3:** Grounded AI repository understanding, provider abstraction (Gemini & Mock), deterministic evidence validation, PostgreSQL caching, and interactive AI Insights UI.
 - **[x] Phase 4:** Semantic Repository Retrieval (intelligent line-aware chunking, dual-mode pgvector + relational fallback, embeddings, search API & UI).
-- **[ ] Phase 5:** _Planned_ — Product refinement, UX polish, and deep visualization.
-- **[ ] Phase 6:** _Planned_ — Production hardening, caching, queue workers, and public deployment.
-- **[ ] Phase 7+:** _Planned_ — Browser extensions and companion desktop applications.
+- **[x] Phase 5:** Product UI/UX refinement, design system primitives, and accessibility hardening.
+- **[x] Phase 6:** Client-agnostic sandboxed repository execution and live preview subsystem.
+- **[x] Phase 7:** Productionization, URL routing, database migrations, resilience, containerization, and CI.
+- **[ ] Phase 8+:** _Planned_ — Browser extensions and companion desktop applications.
 
 ---
 
 ## Security
 
-- **No Secret Leakage:** GitHub credentials (`GITHUB_TOKEN`) and AI provider keys (`GEMINI_API_KEY`) are strictly loaded server-side in `apps/api` and are never forwarded to the client or embedded in client bundles.
+- **Host Execution Containment:** The host-process Node execution and live preview subsystem is strictly disabled by default (`ENABLE_UNSAFE_DEV_SANDBOX=false`). Because host-process execution lacks kernel-level sandbox isolation (cgroups, microVMs), it cannot safely execute untrusted or hostile code. Normal product deployments do not expose execution or preview routes. An unsafe development mode is available solely for local testing via `ENABLE_UNSAFE_DEV_SANDBOX=yes`. Arbitrary `inlineCode` submissions are strictly refused.
+- **Public Repository Policy:** ArchLens operates on public repositories only. Private repository ingestion is rejected with typed HTTP 403 `PrivateRepositoryNotSupported` errors to prevent unauthorized access via server-side `GITHUB_TOKEN` credentials.
+- **Trust Proxy & Rate Limiting:** Behind reverse proxies such as Nginx, ArchLens respects trusted private subnets (`TRUST_PROXY`) to isolate client IPs and prevent cross-client rate-limit exhaustion.
+- **No Secret Leakage:** GitHub credentials (`GITHUB_TOKEN`) and AI provider keys (`GEMINI_API_KEY`) are strictly loaded server-side in `apps/api` and are never forwarded to the client or embedded in client bundles. Attempt logs redact all credentials.
 - **Prompt-Injection Defense:** Untrusted repository content (README and description) is bounded to 2,000 characters, stripped of delimiter tags (`</?untrusted_content[^>]*>`), and isolated inside `<untrusted_content>` tags with strict system instructions prohibiting execution of untrusted instructions.
 - **Deterministic Evidence Validation:** All AI-generated citations are audited post-generation against verified Phase 2 analysis facts by `EvidenceValidator` before persistence or client delivery.
 - **Input Sanitization:** URL parsing and path parameters are validated via Zod schemas and normalized to prevent path traversal (`../`) attacks.

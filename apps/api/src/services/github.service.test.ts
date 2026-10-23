@@ -4,6 +4,8 @@ import {
   GitHubRateLimitError,
   GitHubNotFoundError,
   GitHubTreeTooLargeError,
+  GitHubPrivateRepositoryError,
+  GitHubTimeoutError,
   MAX_TREE_ITEMS,
 } from './github.service.js';
 
@@ -145,5 +147,80 @@ describe('GitHubService (Offline / Mocked)', () => {
     const serviceWithoutToken = new GitHubService({ token: '' });
     const headersWithoutToken = (serviceWithoutToken as any).getHeaders();
     expect(headersWithoutToken.Authorization).toBeUndefined();
+  });
+
+  it('rejects private repository with GitHubPrivateRepositoryError', async () => {
+    const mockResponse = new Response(
+      JSON.stringify({
+        id: 12345,
+        name: 'secret-repo',
+        private: true,
+        owner: { login: 'internal-corp' },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    );
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse);
+
+    const service = new GitHubService();
+    await expect(service.getRepositoryMetadata('internal-corp', 'secret-repo')).rejects.toThrow(
+      GitHubPrivateRepositoryError
+    );
+  });
+
+  it('throws GitHubTimeoutError when request times out', async () => {
+    // Mock fetch that hangs or takes longer than timeoutMs
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, opts: any) => {
+      return new Promise<Response>((_, reject) => {
+        if (opts?.signal) {
+          opts.signal.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            reject(err);
+          });
+        }
+      });
+    });
+
+    const service = new GitHubService();
+    await expect(
+      service.getRepositoryMetadata('owner', 'slow-repo', { timeoutMs: 50 })
+    ).rejects.toThrow(GitHubTimeoutError);
+  });
+
+  describe('getHeadCommit', () => {
+    it('returns commitSha and treeSha on successful response', async () => {
+      const mockResponse = new Response(
+        JSON.stringify({
+          sha: 'commit-sha-12345',
+          commit: {
+            tree: {
+              sha: 'tree-sha-67890',
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse);
+
+      const service = new GitHubService();
+      const result = await service.getHeadCommit('tiangolo', 'fastapi');
+
+      expect(result.commitSha).toBe('commit-sha-12345');
+      expect(result.treeSha).toBe('tree-sha-67890');
+    });
+
+    it('throws GitHubNotFoundError on 404', async () => {
+      const mockResponse = new Response(JSON.stringify({ message: 'Not Found' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(mockResponse);
+
+      const service = new GitHubService();
+      await expect(service.getHeadCommit('invalid', 'repo')).rejects.toThrow(GitHubNotFoundError);
+    });
   });
 });

@@ -100,13 +100,19 @@ describe('Router Utilities', () => {
       pathname: '/',
       search: '',
     };
-    let mockHistory: { pushState: any } = { pushState: vi.fn() };
+    let mockHistory: { pushState: any; replaceState: any } = { pushState: vi.fn(), replaceState: vi.fn() };
 
     beforeEach(() => {
       mockListeners = {};
       mockLocation = { pathname: '/', search: '' };
       mockHistory = {
         pushState: vi.fn((_state, _title, url) => {
+          const urlStr = String(url);
+          const [p, s = ''] = urlStr.split('?');
+          mockLocation.pathname = p;
+          mockLocation.search = s ? `?${s}` : '';
+        }),
+        replaceState: vi.fn((_state, _title, url) => {
           const urlStr = String(url);
           const [p, s = ''] = urlStr.split('?');
           mockLocation.pathname = p;
@@ -173,6 +179,28 @@ describe('Router Utilities', () => {
         owner: 'pallets',
         repo: 'flask',
         tab: 'tree',
+      });
+
+      unsubscribe();
+    });
+
+    it('uses replaceState when options.replace is true', () => {
+      const listener = vi.fn();
+      const unsubscribe = subscribeToNavigation(listener);
+
+      navigateTo('/repos/pallets/flask?tab=overview', { replace: true });
+
+      expect(mockHistory.replaceState).toHaveBeenCalledWith(
+        {},
+        '',
+        '/repos/pallets/flask?tab=overview'
+      );
+      expect(mockHistory.pushState).not.toHaveBeenCalled();
+      expect(listener).toHaveBeenCalledWith({
+        type: 'repo',
+        owner: 'pallets',
+        repo: 'flask',
+        tab: 'overview',
       });
 
       unsubscribe();

@@ -27,7 +27,6 @@ export const ExecutionRequestSchema = z.object({
   profile: ExecutionProfileSchema.optional(),
   args: z.array(z.string().max(100)).max(10).optional(),
   timeoutMs: z.number().int().min(500).max(10000).optional(),
-  inlineCode: z.string().max(65536).optional(),
 });
 export type ExecutionRequest = z.infer<typeof ExecutionRequestSchema>;
 
