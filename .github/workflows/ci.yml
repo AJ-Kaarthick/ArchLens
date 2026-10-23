@@ -67,6 +67,7 @@ jobs:
       - name: Run tests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/archlens
+          AI_PROVIDER: mock
         run: pnpm -r run test
 
       - name: Verify database schema & migration consistency (no drift)

@@ -11,11 +11,20 @@ import { ResilientFallbackProvider } from './providers/resilient-fallback.provid
 import { CircuitBreaker } from './circuit-breaker.js';
 
 describe('AIService', () => {
+  let originalAiProvider: string | undefined;
+
   beforeAll(async () => {
+    originalAiProvider = process.env.AI_PROVIDER;
+    process.env.AI_PROVIDER = 'mock';
     await initDb();
   });
 
   afterAll(async () => {
+    if (originalAiProvider === undefined) {
+      delete process.env.AI_PROVIDER;
+    } else {
+      process.env.AI_PROVIDER = originalAiProvider;
+    }
     await sql.end();
   });
 
