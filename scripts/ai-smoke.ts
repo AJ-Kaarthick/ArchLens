@@ -9,6 +9,7 @@ import {
   classifyGeminiError,
   redactSecrets,
 } from '../apps/api/src/services/ai/providers/gemini.provider.js';
+import { OpenAICompatibleProvider } from '../apps/api/src/services/ai/providers/openai-compatible.provider.js';
 import type { AnalysisResult } from '../packages/shared/src/index.js';
 
 // Resolve directory and load environment variables from apps/api/.env
@@ -18,11 +19,18 @@ const apiEnvPath = path.resolve(__dirname, '../apps/api/.env');
 dotenv.config({ path: apiEnvPath });
 dotenv.config(); // fallback to current process env
 
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey) {
-  console.error('❌ Error: GEMINI_API_KEY is not set in apps/api/.env or process.env');
-  process.exit(1);
-}
+// Canonical and alias configuration resolution
+const geminiApiKey = process.env.GEMINI_API_KEY;
+const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const geminiFallbackKey = process.env.GEMINI_FALLBACK_API_KEY;
+const geminiTertiaryKey = process.env.GEMINI_TERTIARY_API_KEY;
+
+// Independent Fallback Provider Configuration (Canonical with supported aliases)
+const fallbackApiKey = process.env.AI_FALLBACK_API_KEY || process.env.OPENAI_API_KEY;
+const fallbackBaseUrl =
+  process.env.AI_FALLBACK_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+const fallbackModel =
+  process.env.AI_FALLBACK_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 // Representative ArchLens repository analysis facts (Fastify)
 const mockAnalysis: AnalysisResult = {
@@ -56,33 +64,12 @@ const mockAnalysis: AnalysisResult = {
       confidence: 'high',
       evidence: 'package.json',
     },
-    {
-      category: 'build',
-      name: 'npm',
-      version: null,
-      confidence: 'high',
-      evidence: 'package.json',
-    },
-    {
-      category: 'testing',
-      name: 'tap',
-      version: '16.3.0',
-      confidence: 'high',
-      evidence: 'package.json',
-    },
-    {
-      category: 'framework',
-      name: 'light-my-request',
-      version: '5.10.0',
-      confidence: 'high',
-      evidence: 'package.json',
-    },
   ],
   architecture: {
     isMonorepo: false,
     monorepoTool: null,
     workspaces: [],
-    detectedPatterns: ['Layered Architecture', 'Plugin Architecture', 'Event-Driven'],
+    detectedPatterns: ['Layered Architecture', 'Plugin Architecture'],
     primaryEntrypoints: ['fastify.js', 'lib/server.js'],
     keyLandmarks: [
       {
@@ -90,24 +77,6 @@ const mockAnalysis: AnalysisResult = {
         name: 'fastify.js',
         type: 'entry',
         description: 'Fastify application root and factory constructor',
-      },
-      {
-        path: 'lib/reply.js',
-        name: 'reply.js',
-        type: 'entry',
-        description: 'Reply instance prototype and lifecycle handlers',
-      },
-      {
-        path: 'lib/request.js',
-        name: 'request.js',
-        type: 'entry',
-        description: 'Request instance prototype and payload parser',
-      },
-      {
-        path: 'package.json',
-        name: 'package.json',
-        type: 'manifest',
-        description: 'Root manifest with scripts and dependencies',
       },
     ],
   },
@@ -135,82 +104,26 @@ const mockAnalysis: AnalysisResult = {
       extension: 'js',
       isLandmark: true,
     },
-    {
-      path: 'lib/reply.js',
-      name: 'reply.js',
-      type: 'file',
-      category: 'source',
-      size: 15000,
-      extension: 'js',
-      isLandmark: true,
-    },
-    {
-      path: 'lib/request.js',
-      name: 'request.js',
-      type: 'file',
-      category: 'source',
-      size: 18000,
-      extension: 'js',
-      isLandmark: true,
-    },
-    {
-      path: 'package.json',
-      name: 'package.json',
-      type: 'file',
-      category: 'config',
-      size: 3200,
-      extension: 'json',
-      isLandmark: true,
-    },
   ],
 };
 
 const readmeExcerpt = `
 # Fastify
-Fastify is a web framework highly focused on providing the best developer experience with the least overhead and a powerful plugin architecture, inspired by Hapi and Express.
-Features:
-- Highly performant: as far as we know, Fastify is one of the fastest web frameworks in town.
-- Extensible: Fastify is fully extensible via its hooks, plugins and decorators.
-- Schema based: even if it is not mandatory we recommend using JSON Schema to validate your routes and serialize your outputs.
+Fastify is a web framework highly focused on providing the best developer experience with the least overhead and a powerful plugin architecture.
 `;
 
 const retrievedChunks = [
   {
     filePath: 'fastify.js',
     startLine: 1,
-    endLine: 35,
+    endLine: 20,
     content: `
 'use strict'
 const { createServer } = require('http')
-const Reply = require('./lib/reply')
-const Request = require('./lib/request')
-
-function fastify (options) {
-  options = options || {}
-  const router = findMyWay()
-  return {
-    get: (url, opts, handler) => router.on('GET', url, opts, handler),
-    listen: (port, cb) => server.listen(port, cb)
-  }
+function fastify(options) {
+  return { get: () => {} }
 }
 module.exports = fastify
-`,
-  },
-  {
-    filePath: 'lib/reply.js',
-    startLine: 1,
-    endLine: 25,
-    content: `
-'use strict'
-function Reply (res, context, log) {
-  this.raw = res
-  this.context = context
-  this.log = log
-}
-Reply.prototype.send = function (payload) {
-  this.raw.end(JSON.stringify(payload))
-}
-module.exports = Reply
 `,
   },
 ];
@@ -336,7 +249,7 @@ async function runModelAttempt(
     const httpStatus = status ?? (isTimeout ? 408 : 500);
 
     const rawMsg = err instanceof Error ? err.message : String(err);
-    const sanitizedMsg = redactSecrets(rawMsg, [apiKey]);
+    const sanitizedMsg = redactSecrets(rawMsg, [geminiApiKey || '']);
 
     return {
       model,
@@ -350,18 +263,125 @@ async function runModelAttempt(
   }
 }
 
-async function main() {
+function printConfigurationDiagnosis() {
+  console.log('='.repeat(70));
+  console.log('🔍 ARCHLENS AI PROVIDER CONFIGURATION DIAGNOSIS');
+  console.log('='.repeat(70));
+  console.log(`Timestamp: ${new Date().toISOString()}`);
+  console.log(`Env File:  ${apiEnvPath}`);
+  console.log('-'.repeat(70));
+
+  console.log('\n[Primary Provider: Google Gemini]');
+  console.log(`  GEMINI_API_KEY:          ${geminiApiKey ? `[CONFIGURED, length=${geminiApiKey.length}]` : '[NOT SET]'}`);
+  console.log(`  GEMINI_MODEL:            ${process.env.GEMINI_MODEL || '[DEFAULT: gemini-3.8-flash]'}`);
+  console.log(`  GEMINI_FALLBACK_API_KEY: ${geminiFallbackKey ? `[CONFIGURED, length=${geminiFallbackKey.length}]` : '[NOT SET]'}`);
+  console.log(`  GEMINI_TERTIARY_API_KEY: ${geminiTertiaryKey ? `[CONFIGURED, length=${geminiTertiaryKey.length}]` : '[NOT SET]'}`);
+
+  console.log('\n[Independent Fallback Provider: OpenAI-Compatible]');
+  const hasFallbackKey = Boolean(fallbackApiKey);
+  console.log(`  AI_FALLBACK_API_KEY:     ${process.env.AI_FALLBACK_API_KEY ? `[CONFIGURED, length=${process.env.AI_FALLBACK_API_KEY.length}]` : '[NOT SET]'}`);
+  console.log(`  OPENAI_API_KEY (alias):  ${process.env.OPENAI_API_KEY ? `[CONFIGURED, length=${process.env.OPENAI_API_KEY.length}]` : '[NOT SET]'}`);
+  console.log(`  Effective Fallback Key:  ${hasFallbackKey ? `[CONFIGURED, length=${fallbackApiKey!.length}]` : '[NOT SET]'}`);
+  console.log(`  AI_FALLBACK_BASE_URL:    ${fallbackBaseUrl}`);
+  console.log(`  AI_FALLBACK_MODEL:       ${fallbackModel}`);
+
+  console.log('\n[Live Test Capabilities]');
+  if (hasFallbackKey) {
+    console.log('  ✅ Independent fallback credentials ARE configured.');
+    console.log('     Run with --live-fallback to send 1 bounded request to the independent provider.');
+  } else {
+    console.log('  ⚠️  Independent fallback credentials are NOT configured.');
+    console.log('     To configure, set in apps/api/.env:');
+    console.log('       AI_FALLBACK_API_KEY=<your-key>  (or OPENAI_API_KEY)');
+    console.log('       AI_FALLBACK_BASE_URL=<endpoint> (optional, e.g. https://api.openai.com/v1 or https://openrouter.ai/api/v1)');
+    console.log('       AI_FALLBACK_MODEL=<model>       (optional, defaults to gpt-4o-mini)');
+  }
+
+  if (geminiApiKey) {
+    console.log('  ✅ Gemini primary credentials ARE configured.');
+    console.log('     Run with --live-gemini to run the Gemini multi-model diagnostic.');
+  }
+
+  console.log('\n' + '='.repeat(70));
+}
+
+async function runLiveFallbackSmoke(): Promise<void> {
+  console.log('='.repeat(70));
+  console.log('🚀 ARCHLENS LIVE INDEPENDENT PROVIDER SMOKE TEST');
+  console.log('='.repeat(70));
+
+  if (!fallbackApiKey) {
+    console.error('❌ Error: Cannot run --live-fallback: No independent fallback API key configured.');
+    console.error('Missing configuration:');
+    console.error('  - AI_FALLBACK_API_KEY (or OPENAI_API_KEY)');
+    console.error('  - AI_FALLBACK_BASE_URL (defaults to https://api.openai.com/v1)');
+    console.error('  - AI_FALLBACK_MODEL (defaults to gpt-4o-mini)');
+    process.exit(1);
+  }
+
+  console.log(`Timestamp: ${new Date().toISOString()}`);
+  console.log(`Base URL:  ${fallbackBaseUrl}`);
+  console.log(`Model:     ${fallbackModel}`);
+  console.log(`API Key:   [CONFIGURED - length ${fallbackApiKey.length}]`);
+  console.log(`Timeout:   15,000ms bounded boundary`);
+  console.log('-'.repeat(70));
+
+  const provider = new OpenAICompatibleProvider({
+    apiKey: fallbackApiKey,
+    baseUrl: fallbackBaseUrl,
+    model: fallbackModel,
+    perAttemptTimeoutMs: 15_000,
+    maxRetries: 1,
+  });
+
+  const startTime = Date.now();
+  try {
+    process.stdout.write(`Sending 1 bounded request to ${fallbackModel} at ${fallbackBaseUrl}... `);
+    const result = await provider.explain({
+      topic: 'overview',
+      context: groundedContext.combinedContext,
+      repoName: 'fastify/fastify',
+    });
+
+    const latencyMs = Date.now() - startTime;
+    console.log(`✅ SUCCESS (${latencyMs}ms)`);
+    console.log('-'.repeat(70));
+    console.log('Outcome:');
+    console.log(`  Provider:     ${result.provider}`);
+    console.log(`  Model:        ${result.model}`);
+    console.log(`  Summary:      ${result.summary}`);
+    console.log(`  Takeaways:    ${result.keyTakeaways.length} items`);
+    console.log(`  Evidence:     ${result.evidence.length} items`);
+    console.log('='.repeat(70));
+  } catch (err: unknown) {
+    const latencyMs = Date.now() - startTime;
+    console.log(`❌ FAILED (${latencyMs}ms)`);
+    console.log('-'.repeat(70));
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    const sanitized = redactSecrets(rawMsg, [fallbackApiKey, geminiApiKey || '']);
+    console.error(`Error: ${sanitized}`);
+    console.log('='.repeat(70));
+    process.exit(1);
+  }
+}
+
+async function runGeminiSmoke(): Promise<void> {
+  if (!geminiApiKey) {
+    console.error('❌ Error: Cannot run --live-gemini: GEMINI_API_KEY is not set.');
+    process.exit(1);
+  }
+
   console.log('='.repeat(70));
   console.log('🔍 ARCHLENS REAL GEMINI PROVIDER SMOKE DIAGNOSTIC');
   console.log('='.repeat(70));
   console.log(`Timestamp: ${new Date().toISOString()}`);
-  console.log(`API Key: [CONFIGURED - length ${apiKey?.length || 0}]`);
+  console.log(`API Key: [CONFIGURED - length ${geminiApiKey.length}]`);
   console.log(`Context Size: ~${groundedContext.combinedContext.length} chars (~${Math.round(groundedContext.combinedContext.length / 4)} tokens)`);
-  console.log(`Attempt Timeout: 30,000ms (Generous diagnostic boundary)`);
+  console.log(`Attempt Timeout: 30,000ms`);
   console.log(`Runs Per Model: 5`);
   console.log('-'.repeat(70));
 
-  const client = new GoogleGenAI({ apiKey });
+  const client = new GoogleGenAI({ apiKey: geminiApiKey });
   const models = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash'];
   const allResults: AttemptRecord[] = [];
   const modelSummaries: ModelSummary[] = [];
@@ -386,13 +406,11 @@ async function main() {
         );
       }
 
-      // Small pause between attempts to avoid bursting free-tier limits
       if (i < 5) {
         await new Promise((r) => setTimeout(r, 1200));
       }
     }
 
-    // Compute summary
     const twoHundred = modelAttempts.filter((a) => a.httpStatus >= 200 && a.httpStatus < 300).length;
     const fourTwentyNine = modelAttempts.filter((a) => a.httpStatus === 429).length;
     const fiveHundredThree = modelAttempts.filter((a) => a.httpStatus === 503).length;
@@ -421,7 +439,6 @@ async function main() {
     });
   }
 
-  // Print Summary Table
   console.log('\n' + '='.repeat(70));
   console.log('📊 GEMINI SMOKE TEST SUMMARY TABLE');
   console.log('='.repeat(70));
@@ -439,6 +456,19 @@ async function main() {
     );
   }
   console.log('='.repeat(70));
+}
+
+async function main() {
+  const isLiveFallback = process.argv.includes('--live-fallback');
+  const isLiveGemini = process.argv.includes('--live-gemini') || process.argv.includes('--gemini');
+
+  if (isLiveFallback) {
+    await runLiveFallbackSmoke();
+  } else if (isLiveGemini) {
+    await runGeminiSmoke();
+  } else {
+    printConfigurationDiagnosis();
+  }
 }
 
 main().catch((err) => {
