@@ -90,9 +90,19 @@ export const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                           {item.role}
                         </Badge>
                       </div>
-                      <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-1 group-hover:text-slate-300">
+                      <p className="text-xs text-slate-300 mt-0.5 group-hover:text-slate-200">
                         {item.rationale}
                       </p>
+                      {item.evidence && (
+                        <div className="flex items-center gap-1.5 mt-1 text-[11px] text-slate-400">
+                          <span className="text-[10px] uppercase tracking-wider font-semibold text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800 shrink-0">
+                            {item.evidenceSource || 'evidence'}
+                          </span>
+                          <span className="font-mono text-slate-400 truncate">
+                            {item.evidence}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 text-xs text-slate-500 group-hover:text-blue-400 transition shrink-0 pl-9 sm:pl-0">

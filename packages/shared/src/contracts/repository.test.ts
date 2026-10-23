@@ -5,6 +5,7 @@ import {
   AnalysisResultSchema,
   LandmarkContentSchema,
   ApiErrorSchema,
+  ReadingGuidanceItemSchema,
 } from './repository.js';
 
 describe('Shared Contracts - repository', () => {
@@ -170,6 +171,63 @@ describe('Shared Contracts - repository', () => {
       });
       expect(parsed.isRateLimit).toBe(false);
       expect(parsed.suggestedAction).toBeNull();
+    });
+  });
+
+  describe('ReadingGuidanceItemSchema', () => {
+    it('validates legacy reading guidance item without optional evidence fields', () => {
+      const item = {
+        step: 1,
+        path: 'README.md',
+        name: 'README.md',
+        role: 'overview',
+        rationale: 'Start here for repository intent.',
+      };
+      const parsed = ReadingGuidanceItemSchema.parse(item);
+      expect(parsed.step).toBe(1);
+      expect(parsed.role).toBe('overview');
+      expect(parsed.evidence).toBeUndefined();
+      expect(parsed.evidenceSource).toBeUndefined();
+    });
+
+    it('validates evidence-grounded reading guidance item with manifest evidence', () => {
+      const item = {
+        step: 2,
+        path: 'package.json',
+        name: 'package.json',
+        role: 'root-manifest',
+        rationale: 'Root package manifest declaring dependencies and scripts.',
+        evidence: 'package.json declares name: archlens, 12 dependencies, and build script.',
+        evidenceSource: 'manifest',
+      };
+      const parsed = ReadingGuidanceItemSchema.parse(item);
+      expect(parsed.step).toBe(2);
+      expect(parsed.evidence).toContain('package.json declares');
+      expect(parsed.evidenceSource).toBe('manifest');
+    });
+
+    it('validates evidence-grounded item with structural or conventional evidence', () => {
+      const structureItem = {
+        step: 3,
+        path: 'apps/api/src/server.ts',
+        name: 'server.ts',
+        role: 'entrypoint',
+        rationale: 'Backend HTTP service bootstrapper.',
+        evidence: 'Discovered in workspace apps/api as runtime bootstrapper.',
+        evidenceSource: 'structure',
+      };
+      expect(ReadingGuidanceItemSchema.parse(structureItem).evidenceSource).toBe('structure');
+
+      const conventionItem = {
+        step: 4,
+        path: 'cmd/server/main.go',
+        name: 'main.go',
+        role: 'entrypoint',
+        rationale: 'Canonical Go service entrypoint.',
+        evidence: 'Standard Go multi-application entrypoint convention.',
+        evidenceSource: 'convention',
+      };
+      expect(ReadingGuidanceItemSchema.parse(conventionItem).evidenceSource).toBe('convention');
     });
   });
 });

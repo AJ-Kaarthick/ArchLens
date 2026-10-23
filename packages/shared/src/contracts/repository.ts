@@ -145,12 +145,22 @@ export const ReadingGuidanceRoleSchema = z.enum([
 
 export type ReadingGuidanceRole = z.infer<typeof ReadingGuidanceRoleSchema>;
 
+export const ReadingGuidanceEvidenceSourceSchema = z.enum([
+  'manifest',
+  'structure',
+  'convention',
+]);
+
+export type ReadingGuidanceEvidenceSource = z.infer<typeof ReadingGuidanceEvidenceSourceSchema>;
+
 export const ReadingGuidanceItemSchema = z.object({
   step: z.number(),
   path: z.string(),
   name: z.string(),
   role: ReadingGuidanceRoleSchema,
   rationale: z.string(),
+  evidence: z.string().optional(),
+  evidenceSource: ReadingGuidanceEvidenceSourceSchema.optional(),
 });
 
 export type ReadingGuidanceItem = z.infer<typeof ReadingGuidanceItemSchema>;

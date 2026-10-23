@@ -219,22 +219,26 @@ describe('Deterministic Analyzer', () => {
       const guidance = arch.readingGuidance!;
       expect(guidance.length).toBeGreaterThanOrEqual(4);
 
-      // Verify sequence and roles
-      expect(guidance[0]).toEqual({
+      // Verify sequence and roles with evidence
+      expect(guidance[0]).toMatchObject({
         step: 1,
         path: 'README.md',
         name: 'README.md',
         role: 'overview',
         rationale: expect.stringContaining('Start here'),
       });
+      expect(guidance[0].evidence).toBeDefined();
+      expect(guidance[0].evidenceSource).toBe('structure');
 
-      expect(guidance[1]).toEqual({
+      expect(guidance[1]).toMatchObject({
         step: 2,
         path: 'pnpm-workspace.yaml',
         name: 'pnpm-workspace.yaml',
         role: 'root-manifest',
         rationale: expect.stringContaining('workspace topology'),
       });
+      expect(guidance[1].evidence).toContain('pnpm-workspace.yaml declares workspaces');
+      expect(guidance[1].evidenceSource).toBe('manifest');
 
       const paths = guidance.map((g) => g.path);
       expect(paths).toContain('apps/api/src/server.ts');
@@ -596,6 +600,273 @@ requests==2.31.0
       });
 
       expect(result.techStack.some((t) => t.name === 'Flask')).toBe(false);
+    });
+  });
+
+  describe('Evidence-Linked Start Here Reading Guidance & Failure Cases', () => {
+    const makeBlob = (path: string, size = 100): RawGitTreeItem => ({
+      path,
+      mode: '100644',
+      type: 'blob',
+      sha: 'fake-sha',
+      size,
+    });
+
+    it('grounds Node library reading guidance in package.json manifest (cors style)', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('README.md', 500),
+        makeBlob('package.json', 300),
+        makeBlob('lib/index.js', 1200),
+        makeBlob('LICENSE', 200),
+        makeBlob('HISTORY.md', 400),
+        makeBlob('test/cors.js', 800),
+      ];
+
+      const manifestContents = {
+        'package.json': JSON.stringify({
+          name: 'cors',
+          version: '2.8.5',
+          main: './lib/index.js',
+          scripts: {
+            lint: 'eslint lib test',
+            test: 'mocha --reporter spec --check-leaks test/',
+          },
+          dependencies: {
+            'object-assign': '^4',
+            vary: '^1',
+          },
+        }),
+      };
+
+      const arch = detectArchitecture(tree, manifestContents);
+
+      expect(arch.readingGuidance).toBeDefined();
+      const guidance = arch.readingGuidance!;
+      expect(guidance).toHaveLength(3);
+
+      // Step 1: README
+      expect(guidance[0]).toMatchObject({
+        step: 1,
+        path: 'README.md',
+        role: 'overview',
+        rationale: expect.stringContaining('Start here'),
+        evidence: expect.stringContaining('Root documentation file'),
+        evidenceSource: 'structure',
+      });
+
+      // Step 2: package.json
+      expect(guidance[1]).toMatchObject({
+        step: 2,
+        path: 'package.json',
+        role: 'root-manifest',
+        rationale: expect.stringContaining('Root package manifest'),
+        evidence: expect.stringContaining('package.json (cors) declares 2 dependencies'),
+        evidenceSource: 'manifest',
+      });
+      expect(guidance[1].evidence).toContain('scripts: lint, test');
+
+      // Step 3: lib/index.js (manifest-declared entrypoint)
+      expect(guidance[2]).toMatchObject({
+        step: 3,
+        path: 'lib/index.js',
+        role: 'entrypoint',
+        rationale: expect.stringContaining('Core module entrypoint'),
+        evidence: 'Declared as package main in package.json',
+        evidenceSource: 'manifest',
+      });
+    });
+
+    it('never recommends nonexistent or unresolved manifest entrypoint paths', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('README.md', 200),
+        makeBlob('package.json', 200),
+        makeBlob('src/fallback.ts', 500),
+      ];
+
+      const manifestContents = {
+        'package.json': JSON.stringify({
+          name: 'broken-pkg',
+          main: './dist/nonexistent-bundle.js',
+          bin: './bin/phantom-cli.js',
+        }),
+      };
+
+      const arch = detectArchitecture(tree, manifestContents);
+      const paths = arch.readingGuidance!.map((g) => g.path);
+
+      // Must NOT include the nonexistent manifest paths
+      expect(paths).not.toContain('dist/nonexistent-bundle.js');
+      expect(paths).not.toContain('bin/phantom-cli.js');
+
+      // Every path recommended MUST exist in tree
+      for (const item of arch.readingGuidance!) {
+        expect(tree.some((t) => t.path === item.path)).toBe(true);
+      }
+    });
+
+    it('handles repository without README honestly and renumbers steps contiguously', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('package.json', 200),
+        makeBlob('src/index.ts', 500),
+        makeBlob('tsconfig.json', 100),
+      ];
+
+      const manifestContents = {
+        'package.json': JSON.stringify({
+          name: 'headless-service',
+          main: './src/index.ts',
+        }),
+      };
+
+      const arch = detectArchitecture(tree, manifestContents);
+      expect(arch.readingGuidance).toBeDefined();
+      const guidance = arch.readingGuidance!;
+
+      // Step 1 must be package.json (no fake README)
+      expect(guidance[0].path).toBe('package.json');
+      expect(guidance[0].step).toBe(1);
+      expect(guidance[0].role).toBe('root-manifest');
+
+      // Step 2 must be src/index.ts
+      expect(guidance[1].path).toBe('src/index.ts');
+      expect(guidance[1].step).toBe(2);
+      expect(guidance[1].role).toBe('entrypoint');
+
+      // Verify strict sequential 1-indexed numbering with no gaps
+      guidance.forEach((item, index) => {
+        expect(item.step).toBe(index + 1);
+      });
+      expect(guidance.some((g) => g.path.toLowerCase().includes('readme'))).toBe(false);
+    });
+
+    it('resolves Go multi-service cmd/<service>/main.go entrypoints with convention evidence', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('README.md', 100),
+        makeBlob('go.mod', 50),
+        makeBlob('cmd/server/main.go', 500),
+        makeBlob('cmd/cli/main.go', 400),
+        makeBlob('pkg/service/service.go', 300),
+      ];
+
+      const manifestContents = {
+        'go.mod': 'module github.com/acme/platform\n\ngo 1.22.0\n',
+      };
+
+      const arch = detectArchitecture(tree, manifestContents);
+      expect(arch.primaryEntrypoints).toContain('cmd/server/main.go');
+
+      const guidance = arch.readingGuidance!;
+      const goModItem = guidance.find((g) => g.path === 'go.mod');
+      expect(goModItem).toBeDefined();
+      expect(goModItem?.evidence).toBe('go.mod declares module github.com/acme/platform (go 1.22.0)');
+      expect(goModItem?.evidenceSource).toBe('manifest');
+
+      const serverEntry = guidance.find((g) => g.path === 'cmd/server/main.go');
+      expect(serverEntry).toBeDefined();
+      expect(serverEntry?.role).toBe('entrypoint');
+      expect(serverEntry?.evidenceSource).toBe('convention');
+    });
+
+    it('resolves Rust workspace member crates and crate entrypoints', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('README.md', 100),
+        makeBlob('Cargo.toml', 100),
+        makeBlob('crates/server/src/main.rs', 500),
+        makeBlob('crates/core/src/lib.rs', 300),
+      ];
+
+      const manifestContents = {
+        'Cargo.toml': `[workspace]
+members = [
+    "crates/server",
+    "crates/core",
+]
+`,
+      };
+
+      const arch = detectArchitecture(tree, manifestContents);
+      expect(arch.isMonorepo).toBe(true);
+
+      const guidance = arch.readingGuidance!;
+      expect(guidance[0].path).toBe('README.md');
+      expect(guidance[1].path).toBe('Cargo.toml');
+      expect(guidance[1].evidence).toContain('Cargo.toml declares');
+      expect(guidance[1].evidence).toContain('workspace members');
+
+      const serverEntry = guidance.find((g) => g.path === 'crates/server/src/main.rs');
+      expect(serverEntry).toBeDefined();
+      expect(serverEntry?.role).toBe('entrypoint');
+    });
+
+    it('strictly excludes tests, fixtures, and mocks from entrypoints and guidance', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('README.md', 100),
+        makeBlob('package.json', 100),
+        makeBlob('src/index.ts', 500),
+        makeBlob('test/index.test.ts', 200),
+        makeBlob('__tests__/server.spec.ts', 200),
+        makeBlob('fixtures/mock-server/src/index.ts', 200),
+      ];
+
+      const arch = detectArchitecture(tree, {});
+      expect(arch.primaryEntrypoints).not.toContain('test/index.test.ts');
+      expect(arch.primaryEntrypoints).not.toContain('__tests__/server.spec.ts');
+      expect(arch.primaryEntrypoints).not.toContain('fixtures/mock-server/src/index.ts');
+
+      const guidancePaths = arch.readingGuidance!.map((g) => g.path);
+      expect(guidancePaths).not.toContain('test/index.test.ts');
+      expect(guidancePaths).not.toContain('fixtures/mock-server/src/index.ts');
+    });
+
+    it('qualifies App.tsx as an entrypoint only when supported by frontend structure', () => {
+      // 1. App.tsx without frontend structure or manifest: should NOT be an entrypoint
+      const backendTree: RawGitTreeItem[] = [
+        makeBlob('package.json', 100),
+        makeBlob('backend/App.tsx', 200),
+        makeBlob('backend/server.ts', 300),
+      ];
+      const backendArch = detectArchitecture(backendTree, {});
+      expect(backendArch.primaryEntrypoints).not.toContain('backend/App.tsx');
+
+      // 2. App.tsx in apps/web: should BE an entrypoint
+      const frontendTree: RawGitTreeItem[] = [
+        makeBlob('package.json', 100),
+        makeBlob('apps/web/src/App.tsx', 200),
+      ];
+      const frontendArch = detectArchitecture(frontendTree, {});
+      expect(frontendArch.primaryEntrypoints).toContain('apps/web/src/App.tsx');
+    });
+
+    it('recommends database schema landmarks when present', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('README.md', 100),
+        makeBlob('package.json', 100),
+        makeBlob('src/server.ts', 500),
+        makeBlob('drizzle/schema.ts', 400),
+      ];
+
+      const arch = detectArchitecture(tree, {});
+      const guidance = arch.readingGuidance!;
+      const schemaItem = guidance.find((g) => g.path === 'drizzle/schema.ts');
+
+      expect(schemaItem).toBeDefined();
+      expect(schemaItem?.role).toBe('configuration');
+      expect(schemaItem?.rationale).toContain('Persistence schema');
+      expect(schemaItem?.evidence).toContain('Database persistence schema');
+    });
+
+    it('handles minimal repository gracefully without inventing landmarks', () => {
+      const tree: RawGitTreeItem[] = [
+        makeBlob('LICENSE', 100),
+        makeBlob('data.csv', 500),
+      ];
+
+      const arch = detectArchitecture(tree, {});
+      expect(arch.primaryEntrypoints).toEqual([]);
+      // Should not throw or invent paths
+      for (const item of arch.readingGuidance || []) {
+        expect(tree.some((t) => t.path === item.path)).toBe(true);
+      }
     });
   });
 });

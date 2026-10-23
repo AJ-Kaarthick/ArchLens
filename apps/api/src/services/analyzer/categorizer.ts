@@ -236,9 +236,27 @@ export function detectLandmark(path: string): LandmarkInfo | null {
     };
   }
 
+  // Database Schema / Persistence Landmark
+  if (
+    parts.length <= 5 &&
+    (fileName === 'schema.prisma' ||
+      fileName === 'schema.ts' ||
+      fileName === 'schema.sql' ||
+      fileName === 'models.py' ||
+      normalized.includes('drizzle/schema') ||
+      normalized.includes('db/schema'))
+  ) {
+    return {
+      path: normalized,
+      name: fileName,
+      type: 'config',
+      description: `Database persistence schema (${fileName})`,
+    };
+  }
+
   // Key Entrypoints
   if (
-    parts.length <= 4 &&
+    parts.length <= 5 &&
     (fileName === 'main.ts' ||
       fileName === 'index.ts' ||
       fileName === 'main.tsx' ||
@@ -247,7 +265,9 @@ export function detectLandmark(path: string): LandmarkInfo | null {
       fileName === 'main.go' ||
       fileName === 'main.py' ||
       fileName === 'app.py' ||
-      fileName === 'index.js')
+      fileName === 'index.js' ||
+      fileName === 'main.rs' ||
+      fileName === 'lib.rs')
   ) {
     return {
       path: normalized,
