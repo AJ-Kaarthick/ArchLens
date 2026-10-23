@@ -668,7 +668,7 @@ export function generateReadingGuidance(
         addStep(
           candidate,
           'root-manifest',
-          'Root package manifest declaring dependencies, build scripts, and engine constraints.',
+          'Root Go module definition declaring module path, Go toolchain version, and dependencies.',
           `go.mod declares ${modStr}${verStr}`,
           'manifest'
         );
@@ -681,7 +681,7 @@ export function generateReadingGuidance(
           'root-manifest',
           isMonorepo
             ? 'Defines repository workspace topology, dependency boundaries, and package links.'
-            : 'Root package manifest declaring dependencies, build scripts, and engine constraints.',
+            : 'Root Cargo manifest declaring package metadata, language edition, and crate dependencies.',
           `Cargo.toml declares ${nameStr}${wsStr}`,
           'manifest'
         );
@@ -689,7 +689,7 @@ export function generateReadingGuidance(
         addStep(
           candidate,
           'root-manifest',
-          'Root package manifest declaring dependencies, build scripts, and engine constraints.',
+          'Project build manifest declaring dependencies and build configuration.',
           `${candidate} defines project dependencies and build targets.`,
           'manifest'
         );
@@ -735,7 +735,13 @@ export function generateReadingGuidance(
     }
 
     if (/(cmd\/[^/]+\/main\.go|main\.go)/i.test(entry)) {
-      rationale = 'Backend service bootstrapper initializing HTTP routes and dependencies.';
+      const isCli = /(cli|tool|cmd\/[^/]*cli)/i.test(entry);
+      const isServer = /(server|api|daemon|gateway)/i.test(entry);
+      rationale = isCli
+        ? 'Command-line application entrypoint handling arguments and execution.'
+        : isServer
+        ? 'Backend service bootstrapper initializing runtime dependencies and service endpoints.'
+        : 'Application entrypoint initializing runtime execution and dependencies.';
       if (evidenceSource !== 'manifest') {
         evidence = `Canonical Go application entrypoint convention (${entry})`;
         evidenceSource = 'convention';
@@ -749,6 +755,12 @@ export function generateReadingGuidance(
       rationale = 'Backend service bootstrapper initializing HTTP routes and dependencies.';
       if (evidenceSource !== 'manifest') {
         evidence = `Backend service bootstrapper in ${entry}`;
+      }
+    } else if (/(main\.rs)/i.test(entry)) {
+      rationale = 'Binary crate entrypoint initializing runtime execution.';
+      if (evidenceSource !== 'manifest') {
+        evidence = `Rust binary executable root (${entry})`;
+        evidenceSource = 'convention';
       }
     } else if (/(lib\.rs)/i.test(entry)) {
       rationale = 'Core module entrypoint exposing public interfaces and exports.';
@@ -843,7 +855,7 @@ export function generateReadingGuidance(
     }
   }
 
-  // Step 6: Core Configuration or Infrastructure Definition (Docker / tsconfig)
+  // Step 6: Core Configuration or Infrastructure Definition (Docker / Compose / tsconfig)
   const configCandidates = [
     'docker-compose.yml',
     'docker-compose.yaml',
@@ -855,18 +867,29 @@ export function generateReadingGuidance(
   ];
   for (const config of configCandidates) {
     if (pathsSet.has(config) && !seenPaths.has(config)) {
-      const isDocker = config.includes('docker') || config.includes('Dockerfile');
-      addStep(
-        config,
-        'configuration',
-        isDocker
-          ? 'Defines containerized environment constraints and service orchestration.'
-          : 'Central toolchain configuration establishing compiler rules and resolution boundaries.',
-        isDocker
-          ? `Container orchestration specification defining runtime services (${config})`
-          : `Central compiler and resolution configuration (${config})`,
-        'structure'
-      );
+      const isCompose = config.includes('docker-compose');
+      const isDockerfile = config.endsWith('Dockerfile') || config.includes('Dockerfile');
+      const isTsConfig = config.includes('tsconfig');
+      const isVite = config.includes('vite.config');
+
+      let rationale = 'Central toolchain configuration establishing compiler rules and resolution boundaries.';
+      let evidence = `Central compiler and resolution configuration (${config})`;
+
+      if (isCompose) {
+        rationale = 'Defines multi-service container orchestration, networking, and runtime dependencies.';
+        evidence = `Multi-service container orchestration specification (${config})`;
+      } else if (isDockerfile) {
+        rationale = 'Container image specification defining build stages, environment setup, and runtime execution.';
+        evidence = `Container image build specification (${config})`;
+      } else if (isTsConfig) {
+        rationale = 'Central toolchain configuration establishing compiler rules and resolution boundaries.';
+        evidence = `TypeScript compiler and module resolution configuration (${config})`;
+      } else if (isVite) {
+        rationale = 'Frontend build and development server configuration.';
+        evidence = `Vite bundler and dev server configuration (${config})`;
+      }
+
+      addStep(config, 'configuration', rationale, evidence, 'structure');
       break;
     }
   }

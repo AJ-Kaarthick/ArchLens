@@ -246,6 +246,10 @@ describe('Deterministic Analyzer', () => {
       expect(paths).toContain('packages/shared/src/index.ts');
       expect(paths).toContain('Dockerfile');
 
+      const dockerItem = guidance.find((g) => g.path === 'Dockerfile');
+      expect(dockerItem?.rationale).toBe('Container image specification defining build stages, environment setup, and runtime execution.');
+      expect(dockerItem?.evidence).toBe('Container image build specification (Dockerfile)');
+
       // Verify no duplicates
       const uniquePaths = new Set(paths);
       expect(uniquePaths.size).toBe(paths.length);
@@ -274,8 +278,11 @@ describe('Deterministic Analyzer', () => {
       ]);
       expect(guidance[0].role).toBe('overview');
       expect(guidance[1].role).toBe('root-manifest');
+      expect(guidance[1].rationale).toContain('Root Go module definition');
       expect(guidance[2].role).toBe('entrypoint');
       expect(guidance[3].role).toBe('configuration');
+      expect(guidance[3].rationale).toBe('Defines multi-service container orchestration, networking, and runtime dependencies.');
+      expect(guidance[3].evidence).toBe('Multi-service container orchestration specification (docker-compose.yml)');
     });
 
     it('constructs reading guidance for a Rust library crate without docker', () => {
@@ -867,6 +874,34 @@ members = [
       for (const item of arch.readingGuidance || []) {
         expect(tree.some((t) => t.path === item.path)).toBe(true);
       }
+    });
+
+    it('accurately distinguishes Dockerfile image build from docker-compose multi-service orchestration', () => {
+      // 1. Dockerfile alone
+      const dockerfileTree: RawGitTreeItem[] = [
+        makeBlob('package.json', 100),
+        makeBlob('src/index.ts', 200),
+        makeBlob('Dockerfile', 100),
+      ];
+      const dockerfileArch = detectArchitecture(dockerfileTree, {});
+      const dockerfileItem = dockerfileArch.readingGuidance!.find((g) => g.path === 'Dockerfile');
+      expect(dockerfileItem?.rationale).toBe(
+        'Container image specification defining build stages, environment setup, and runtime execution.'
+      );
+      expect(dockerfileItem?.evidence).toBe('Container image build specification (Dockerfile)');
+
+      // 2. docker-compose.yml alone
+      const composeTree: RawGitTreeItem[] = [
+        makeBlob('package.json', 100),
+        makeBlob('src/index.ts', 200),
+        makeBlob('docker-compose.yml', 100),
+      ];
+      const composeArch = detectArchitecture(composeTree, {});
+      const composeItem = composeArch.readingGuidance!.find((g) => g.path === 'docker-compose.yml');
+      expect(composeItem?.rationale).toBe(
+        'Defines multi-service container orchestration, networking, and runtime dependencies.'
+      );
+      expect(composeItem?.evidence).toBe('Multi-service container orchestration specification (docker-compose.yml)');
     });
   });
 });
